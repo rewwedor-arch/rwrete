@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>НАСТРОЙКИ - SMART MONEY CLONE</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+    <!-- HEADER -->
+    <header class="header">
+        <div class="header-title">SMART MONEY CLONE - АГРЕССИВНАЯ ВЕРСИЯ</div>
+        <div class="header-status">
+            <div class="status-item">
+                <span class="status-indicator status-running" id="statusIndicator"></span>
+                <span id="statusText">🟢 РАБОТАЕТ</span>
+            </div>
+            <div class="status-item">
+                <span>Баланс:</span>
+                <span class="balance-display" id="balanceDisplay">$0.00</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- NAVIGATION -->
+    <nav class="nav">
+        <a href="/" class="nav-link">ГЛАВНАЯ</a>
+        <a href="/signals" class="nav-link">СИГНАЛЫ</a>
+        <a href="/settings" class="nav-link active">НАСТРОЙКИ</a>
+    </nav>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-content">
+        <div class="card">
+            <div class="card-header">ПАРАМЕТРЫ СТРАТЕГИИ</div>
+            
+            <form class="settings-form" id="settingsForm">
+                <div class="form-group">
+                    <label class="form-label" for="deposit">Депозит ($)</label>
+                    <input type="number" class="form-input" id="deposit" name="deposit" value="140" min="10" step="10">
+                    <div class="form-hint">Стартовый депозит в USDT</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="entryAmount">Вход в сделку ($)</label>
+                    <input type="number" class="form-input" id="entryAmount" name="entryAmount" value="140" min="10" step="10">
+                    <div class="form-hint">Сумма входа в сделку (100% депозита = $140)</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="maxPositions">Макс позиций</label>
+                    <input type="number" class="form-input" id="maxPositions" name="maxPositions" value="3" min="1" max="10">
+                    <div class="form-hint">Максимальное количество одновременных позиций (обычно 1-2)</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="stopLoss">Стоп лосс (%)</label>
+                    <input type="number" class="form-input" id="stopLoss" name="stopLoss" value="3.5" min="1" max="10" step="0.1">
+                    <div class="form-hint">Фиксированный стоп лосс от входа (3.5%)</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="leverage">Плечо</label>
+                    <select class="form-input" id="leverage" name="leverage">
+                        <option value="50">x50</option>
+                        <option value="75" selected>x75 (MAX)</option>
+                        <option value="100">x100</option>
+                        <option value="125">x125</option>
+                    </select>
+                    <div class="form-hint">Максимальное плечо на Binance Futures</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Цель в день (%)</label>
+                    <div style="display: flex; gap: 1rem;">
+                        <input type="number" class="form-input" id="dailyTargetMin" name="dailyTargetMin" value="10" min="5" max="50" style="flex: 1;">
+                        <span style="align-self: center;">-</span>
+                        <input type="number" class="form-input" id="dailyTargetMax" name="dailyTargetMax" value="15" min="5" max="50" style="flex: 1;">
+                    </div>
+                    <div class="form-hint">Целевой процент прибыли в день (10-15%)</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Направление торговли</label>
+                    <div style="background-color: var(--bg-secondary); padding: 1rem; border-radius: 4px; border: 1px solid var(--border);">
+                        <span style="font-family: var(--font-mono); color: var(--green); font-weight: bold;">LONG_ONLY</span>
+                        <div class="form-hint" style="margin-top: 0.5rem;">Только лонг позиции (агрессивная стратегия)</div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 2rem;">
+                    <button type="submit" class="btn btn-primary">СОХРАНИТЬ</button>
+                </div>
+            </form>
+        </div>
+
+        <div class="card" style="margin-top: 2rem;">
+            <div class="card-header">ИНФОРМАЦИЯ О СТРАТЕГИИ</div>
+            <div style="font-family: var(--font-mono); font-size: 0.9rem; line-height: 1.8; color: var(--text-secondary);">
+                <p><strong style="color: var(--green);">SMC Индикаторы (минимум 4 из 7):</strong></p>
+                <ul style="margin-left: 1.5rem; margin-bottom: 1rem;">
+                    <li>BOS/CHoCH структура рынка</li>
+                    <li>FVG (Fair Value Gap)</li>
+                    <li>EMA200 на 4h (цена выше)</li>
+                    <li>RSI(14) между 40-70</li>
+                    <li>ADX(14) > 25</li>
+                    <li>MACD подтверждение</li>
+                    <li>Volume > SMA20</li>
+                </ul>
+                
+                <p><strong style="color: var(--green);">Правила входа:</strong></p>
+                <ul style="margin-left: 1.5rem; margin-bottom: 1rem;">
+                    <li>Минимум 4 из 7 индикаторов = ЗАХОДИМ</li>
+                    <li>1-3 сигнала в день (бывают дни без сигналов)</li>
+                    <li>Вход на 100% депозита (или больше с оверлевериджем)</li>
+                    <li>Максимальное плечо (x50-x75)</li>
+                </ul>
+                
+                <p><strong style="color: var(--green);">Выход:</strong></p>
+                <ul style="margin-left: 1.5rem;">
+                    <li>НЕТ фиксированного TP - выход по команде</li>
+                    <li>Алерты при +10%, +15%, +40%</li>
+                    <li>СТОП ЛОСС фиксированный -3.5%</li>
+                    <li>Команды Telegram: /close {PAIR}, /close_all</li>
+                </ul>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // Загрузка настроек при загрузке страницы
+        document.addEventListener('DOMContentLoaded', function() {
+            loadConfig();
+            loadBalance();
+        });
+
+        // Загрузка баланса
+        async function loadBalance() {
+            try {
+                const response = await fetch('/api/balance');
+                const data = await response.json();
+                
+                document.getElementById('balanceDisplay').textContent = `$${data.balance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                
+                updateStatus(data.status);
+            } catch (error) {
+                console.error('Error loading balance:', error);
+            }
+        }
+
+        // Загрузка конфигурации
+        async function loadConfig() {
+            try {
+                const response = await fetch('/api/config');
+                const config = await response.json();
+                
+                document.getElementById('deposit').value = config.deposit || 140;
+                document.getElementById('entryAmount').value = config.entry_amount || 140;
+                document.getElementById('maxPositions').value = config.max_positions || 3;
+                document.getElementById('stopLoss').value = config.stop_loss_pct || 3.5;
+                document.getElementById('leverage').value = config.leverage || 75;
+                document.getElementById('dailyTargetMin').value = config.daily_target_min || 10;
+                document.getElementById('dailyTargetMax').value = config.daily_target_max || 15;
+            } catch (error) {
+                console.error('Error loading config:', error);
+            }
+        }
+
+        // Сохранение конфигурации
+        document.getElementById('settingsForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const config = {
+                deposit: parseFloat(document.getElementById('deposit').value),
+                entry_amount: parseFloat(document.getElementById('entryAmount').value),
+                max_positions: parseInt(document.getElementById('maxPositions').value),
+                stop_loss_pct: parseFloat(document.getElementById('stopLoss').value),
+                leverage: parseInt(document.getElementById('leverage').value),
+                daily_target_min: parseInt(document.getElementById('dailyTargetMin').value),
+                daily_target_max: parseInt(document.getElementById('dailyTargetMax').value)
+            };
+            
+            try {
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(config)
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    showAlert('✅', 'Настройки сохранены успешно!', 'success');
+                } else {
+                    showAlert('❌', 'Ошибка сохранения настроек', 'danger');
+                }
+            } catch (error) {
+                console.error('Error saving config:', error);
+                showAlert('❌', 'Ошибка соединения с сервером', 'danger');
+            }
+        });
+
+        // Обновление статуса бота
+        function updateStatus(status) {
+            const indicator = document.getElementById('statusIndicator');
+            const text = document.getElementById('statusText');
+            
+            if (status === 'running') {
+                indicator.className = 'status-indicator status-running';
+                text.textContent = '🟢 РАБОТАЕТ';
+            } else if (status === 'stopped') {
+                indicator.className = 'status-indicator status-stopped';
+                text.textContent = '🔴 ОСТАНОВЛЕН';
+            } else {
+                indicator.className = 'status-indicator status-stopped';
+                text.textContent = '⚠️ ОШИБКА';
+            }
+        }
+
+        // Показ алерта
+        function showAlert(icon, message, type = 'success') {
+            const container = document.getElementById('alertContainer') || createAlertContainer();
+            const alert = document.createElement('div');
+            alert.className = `alert-toast ${type === 'warning' ? 'warning' : type === 'danger' ? 'danger' : ''}`;
+            alert.innerHTML = `
+                <div class="alert-title">${icon}</div>
+                <div class="alert-message">${message}</div>
+            `;
+            
+            container.appendChild(alert);
+            
+            setTimeout(() => {
+                alert.style.animation = 'slideIn 0.3s ease-out reverse';
+                setTimeout(() => alert.remove(), 300);
+            }, 5000);
+        }
+
+        function createAlertContainer() {
+            const container = document.createElement('div');
+            container.id = 'alertContainer';
+            container.style.cssText = 'position: fixed; top: 80px; right: 20px; z-index: 1000;';
+            document.body.appendChild(container);
+            return container;
+        }
+    </script>
+</body>
+</html>

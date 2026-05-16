@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>СИГНАЛЫ - SMART MONEY CLONE</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+    <!-- HEADER -->
+    <header class="header">
+        <div class="header-title">SMART MONEY CLONE - АГРЕССИВНАЯ ВЕРСИЯ</div>
+        <div class="header-status">
+            <div class="status-item">
+                <span class="status-indicator status-running" id="statusIndicator"></span>
+                <span id="statusText">🟢 РАБОТАЕТ</span>
+            </div>
+            <div class="status-item">
+                <span>Баланс:</span>
+                <span class="balance-display" id="balanceDisplay">$0.00</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- NAVIGATION -->
+    <nav class="nav">
+        <a href="/" class="nav-link">ГЛАВНАЯ</a>
+        <a href="/signals" class="nav-link active">СИГНАЛЫ</a>
+        <a href="/settings" class="nav-link">НАСТРОЙКИ</a>
+    </nav>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-content">
+        <div class="card-header" style="margin-bottom: 2rem;">ИСТОРИЯ СИГНАЛОВ</div>
+        
+        <div class="signals-list" id="signalsList">
+            <div class="empty-state">
+                <div class="empty-state-icon">📡</div>
+                <p>Загрузка сигналов...</p>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // Загрузка сигналов при загрузке страницы
+        document.addEventListener('DOMContentLoaded', function() {
+            loadSignals();
+            loadBalance();
+        });
+
+        // Загрузка баланса
+        async function loadBalance() {
+            try {
+                const response = await fetch('/api/balance');
+                const data = await response.json();
+                
+                document.getElementById('balanceDisplay').textContent = `$${data.balance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                
+                updateStatus(data.status);
+            } catch (error) {
+                console.error('Error loading balance:', error);
+            }
+        }
+
+        // Загрузка сигналов
+        async function loadSignals() {
+            try {
+                const response = await fetch('/api/signals');
+                const signals = await response.json();
+                
+                const container = document.getElementById('signalsList');
+                
+                if (signals.length === 0) {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📡</div>
+                            <p>Нет сигналов в истории</p>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                container.innerHTML = signals.map(sig => {
+                    const date = new Date(sig.timestamp);
+                    const dateStr = `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+                    
+                    const fvgIcon = sig.fvg ? '✅' : '❌';
+                    const pnlStatus = sig.pnl && sig.pnl > 0 ? '✅' : sig.pnl && sig.pnl < 0 ? '❌' : '';
+                    const pnlText = sig.pnl ? `${sig.pnl > 0 ? '+' : ''}$${sig.pnl} (${sig.pnl_pct > 0 ? '+' : ''}${sig.pnl_pct}%)` : 'Активен';
+                    
+                    return `
+                        <div class="signal-card">
+                            <div class="signal-header">
+                                <span class="signal-time">${dateStr}</span>
+                                <span class="signal-direction">🟢 ЗАХОДИМ LONG</span>
+                            </div>
+                            <div class="signal-details">
+                                <div class="detail-row">
+                                    <span class="detail-label">ПАРА:</span>
+                                    <span class="detail-value">${sig.symbol}/USDT</span>
+                                </div>
+                                <div class="detail-row">
+                                    <span class="detail-label">ВХОД:</span>
+                                    <span class="detail-value">${sig.entry_price}</span>
+                                </div>
+                                <div class="detail-row">
+                                    <span class="detail-label">СТОП:</span>
+                                    <span class="detail-value">${sig.stop_loss}</span>
+                                </div>
+                                <div class="detail-row">
+                                    <span class="detail-label">PnL:</span>
+                                    <span class="detail-value ${sig.pnl && sig.pnl >= 0 ? 'pnl-positive' : sig.pnl && sig.pnl < 0 ? 'pnl-negative' : ''}">${pnlText} ${pnlStatus}</span>
+                                </div>
+                            </div>
+                            <div class="signal-indicators">
+                                <span class="indicator">SMC: ${sig.smc_score}/7</span>
+                                <span class="indicator">Структура: ${sig.structure || 'N/A'}</span>
+                                <span class="indicator">FVG: ${fvgIcon}</span>
+                                ${sig.rsi ? `<span class="indicator">RSI: ${sig.rsi}</span>` : ''}
+                                ${sig.adx ? `<span class="indicator">ADX: ${sig.adx}</span>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (error) {
+                console.error('Error loading signals:', error);
+                document.getElementById('signalsList').innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">❌</div>
+                        <p>Ошибка загрузки сигналов</p>
+                    </div>
+                `;
+            }
+        }
+
+        // Обновление статуса бота
+        function updateStatus(status) {
+            const indicator = document.getElementById('statusIndicator');
+            const text = document.getElementById('statusText');
+            
+            if (status === 'running') {
+                indicator.className = 'status-indicator status-running';
+                text.textContent = '🟢 РАБОТАЕТ';
+            } else if (status === 'stopped') {
+                indicator.className = 'status-indicator status-stopped';
+                text.textContent = '🔴 ОСТАНОВЛЕН';
+            } else {
+                indicator.className = 'status-indicator status-stopped';
+                text.textContent = '⚠️ ОШИБКА';
+            }
+        }
+    </script>
+</body>
+</html>

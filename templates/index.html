@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SMART MONEY CLONE - Агрессивная Версия</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+    <!-- HEADER -->
+    <header class="header">
+        <div class="header-title">SMART MONEY CLONE - АГРЕССИВНАЯ ВЕРСИЯ</div>
+        <div class="header-status">
+            <div class="status-item">
+                <span class="status-indicator status-running" id="statusIndicator"></span>
+                <span id="statusText">🟢 РАБОТАЕТ</span>
+            </div>
+            <div class="status-item">
+                <span>Баланс:</span>
+                <span class="balance-display" id="balanceDisplay">$0.00</span>
+            </div>
+            <div class="status-item">
+                <span>Сегодня:</span>
+                <span id="todayPnlDisplay" class="today-pnl-positive">$0.00 (0%)</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- NAVIGATION -->
+    <nav class="nav">
+        <a href="/" class="nav-link active">ГЛАВНАЯ</a>
+        <a href="/signals" class="nav-link">СИГНАЛЫ</a>
+        <a href="/settings" class="nav-link">НАСТРОЙКИ</a>
+    </nav>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-content">
+        <!-- CONTROL PANEL -->
+        <div class="control-panel">
+            <button class="btn btn-primary" onclick="startBot()">🟢 ЗАПУСТИТЬ БОТА</button>
+            <button class="btn btn-danger" onclick="stopBot()">🔴 ОСТАНОВИТЬ</button>
+            <button class="btn btn-warning" onclick="closeAllPositions()">🚨 ЗАКРЫТЬ ВСЕ ПОЗИЦИИ</button>
+        </div>
+
+        <!-- DASHBOARD GRID -->
+        <div class="dashboard-grid">
+            <!-- CURRENT POSITIONS -->
+            <div class="card">
+                <div class="card-header">ТЕКУЩИЕ ПОЗИЦИИ</div>
+                <div id="positionsContainer">
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📊</div>
+                        <p>Нет открытых позиций</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- STATISTICS -->
+            <div class="card">
+                <div class="card-header">СТАТИСТИКА</div>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-label">ОБЩАЯ ПРИБЫЛЬ</div>
+                        <div class="stat-value positive" id="totalProfit">$0.00</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">ОБЩИЙ УБЫТОК</div>
+                        <div class="stat-value negative" id="totalLoss">$0.00</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">ЧИСТАЯ ПРИБЫЛЬ</div>
+                        <div class="stat-value" id="netProfit">$0.00</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">ПРИБЫЛЬНЫХ ДНЕЙ</div>
+                        <div class="stat-value" id="profitableDays">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">УБЫТОЧНЫХ ДНЕЙ</div>
+                        <div class="stat-value" id="losingDays">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">КОЭФФ. ПРИБЫЛЬНОСТИ</div>
+                        <div class="stat-value" id="winRate">0%</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">СРЕДНИЙ % В ДЕНЬ</div>
+                        <div class="stat-value positive" id="avgDailyPct">+0%</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- PnL CALENDAR -->
+        <div class="calendar-container">
+            <div class="calendar-header">PnL КАЛЕНДАРЬ - <span id="calendarMonth">Май 2026</span></div>
+            <div class="calendar-grid" id="calendarGrid">
+                <div class="calendar-day-header">Пн</div>
+                <div class="calendar-day-header">Вт</div>
+                <div class="calendar-day-header">Ср</div>
+                <div class="calendar-day-header">Чт</div>
+                <div class="calendar-day-header">Пт</div>
+                <div class="calendar-day-header">Сб</div>
+                <div class="calendar-day-header">Вс</div>
+                <!-- Days will be populated by JavaScript -->
+            </div>
+        </div>
+
+        <!-- RECENT TRADES -->
+        <div class="card" style="margin-top: 2rem;">
+            <div class="card-header">ПОСЛЕДНИЕ СДЕЛКИ</div>
+            <ul class="trades-list" id="tradesList">
+                <li class="trade-item">
+                    <div class="empty-state">
+                        <p>Нет завершенных сделок</p>
+                    </div>
+                </li>
+            </ul>
+        </div>
+    </main>
+
+    <!-- ALERT TOAST CONTAINER -->
+    <div id="alertContainer"></div>
+
+    <script>
+        // WebSocket подключение
+        const socket = io();
+        
+        // Глобальные данные
+        let positionsData = [];
+        let statsData = {};
+        let dailyPnlData = {};
+
+        // Инициализация при загрузке
+        document.addEventListener('DOMContentLoaded', function() {
+            loadBalance();
+            loadPositions();
+            loadStats();
+            loadDailyPnl();
+            loadTrades();
+            
+            // Автообновление: баланс/позиции чаще, статистика и сделки — тоже периодически (раньше блок «СТАТИСТИКА» не обновлялся)
+            setInterval(() => {
+                loadBalance();
+                loadPositions();
+            }, 5000);
+            setInterval(() => {
+                loadStats();
+                loadTrades();
+                loadDailyPnl();
+            }, 15000);
+        });
+
+        // Загрузка баланса
+        async function loadBalance() {
+            try {
+                const response = await fetch('/api/balance');
+                const data = await response.json();
+                
+                document.getElementById('balanceDisplay').textContent = `$${data.balance.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                
+                const todayPnlEl = document.getElementById('todayPnlDisplay');
+                const pnlSign = data.today_pnl >= 0 ? '+' : '';
+                todayPnlEl.textContent = `${pnlSign}$${data.today_pnl.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})} (${pnlSign}${data.today_pnl_pct}%)`;
+                todayPnlEl.className = data.today_pnl >= 0 ? 'today-pnl-positive' : 'today-pnl-negative';
+                
+                updateStatus(data.status);
+            } catch (error) {
+                console.error('Error loading balance:', error);
+            }
+        }
+
+        // Загрузка позиций
+        async function loadPositions() {
+            try {
+                const response = await fetch('/api/positions');
+                const positions = await response.json();
+                positionsData = positions;
+                
+                const container = document.getElementById('positionsContainer');
+                
+                if (positions.length === 0) {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📊</div>
+                            <p>Нет открытых позиций</p>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                container.innerHTML = positions.map(pos => `
+                    <div class="position-card" style="margin-bottom: 1rem;">
+                        <div class="position-header">
+                            <span class="position-symbol">${pos.symbol}</span>
+                            <span class="position-side">${pos.side}</span>
+                        </div>
+                        <div class="position-details">
+                            <div class="detail-row">
+                                <span class="detail-label">Вход:</span>
+                                <span class="detail-value">${pos.entry_price}</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Сейчас:</span>
+                                <span class="detail-value" id="price-${pos.id}">${pos.current_price != null ? Number(pos.current_price).toFixed(6) : '—'}</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">PnL:</span>
+                                <span class="detail-value ${pos.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}" id="pnl-${pos.id}">${pos.pnl >= 0 ? '+' : ''}$${Number(pos.pnl || 0).toFixed(2)} (${pos.pnl >= 0 ? '+' : ''}${Number(pos.pnl_pct || 0).toFixed(2)}%)</span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="detail-label">Стоп:</span>
+                                <span class="detail-value">${pos.stop_loss} (-3.5%)</span>
+                            </div>
+                        </div>
+                        <div class="position-actions">
+                            <button class="btn btn-secondary btn-small" onclick="closePosition('${pos.symbol}')">ЗАКРЫТЬ</button>
+                            <button class="btn btn-danger btn-small" onclick="emergencyClose('${pos.symbol}')">СРОЧНО ЗАКРЫТЬ</button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error('Error loading positions:', error);
+            }
+        }
+
+        // Загрузка статистики
+        async function loadStats() {
+            try {
+                const response = await fetch('/api/stats');
+                const stats = await response.json();
+                statsData = stats;
+                
+                document.getElementById('totalProfit').textContent = `$${stats.total_profit.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                document.getElementById('totalLoss').textContent = `$${stats.total_loss.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                const netEl = document.getElementById('netProfit');
+                netEl.textContent = `$${stats.net_profit.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+                netEl.className = 'stat-value ' + (stats.net_profit >= 0 ? 'positive' : 'negative');
+                document.getElementById('profitableDays').textContent = stats.profitable_days;
+                document.getElementById('losingDays').textContent = stats.losing_days;
+                document.getElementById('winRate').textContent = `${stats.win_rate}%`;
+                const avgEl = document.getElementById('avgDailyPct');
+                const av = stats.avg_daily_pct;
+                avgEl.textContent = (av >= 0 ? '+' : '') + av + '%';
+                avgEl.className = 'stat-value ' + (av >= 0 ? 'positive' : 'negative');
+            } catch (error) {
+                console.error('Error loading stats:', error);
+            }
+        }
+
+        // Загрузка PnL по дням
+        async function loadDailyPnl() {
+            try {
+                const response = await fetch('/api/daily_pnl');
+                dailyPnlData = await response.json();
+                renderCalendar();
+            } catch (error) {
+                console.error('Error loading daily PnL:', error);
+            }
+        }
+
+        // Рендер календаря
+        function renderCalendar() {
+            const grid = document.getElementById('calendarGrid');
+            const now = new Date();
+            const year = now.getFullYear();
+            const month = now.getMonth();
+            
+            // Обновляем заголовок
+            const monthNames = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 
+                               'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+            document.getElementById('calendarMonth').textContent = `${monthNames[month]} ${year}`;
+            
+            // Очищаем старые дни (оставляем заголовки)
+            const headers = grid.querySelectorAll('.calendar-day-header');
+            grid.innerHTML = '';
+            headers.forEach(header => grid.appendChild(header));
+            
+            // Первый день месяца
+            const firstDay = new Date(year, month, 1);
+            let startDay = firstDay.getDay() - 1;
+            if (startDay < 0) startDay = 6;
+            
+            // Количество дней в месяце
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            
+            // Пустые ячейки до первого дня
+            for (let i = 0; i < startDay; i++) {
+                const emptyDay = document.createElement('div');
+                emptyDay.className = 'calendar-day empty';
+                grid.appendChild(emptyDay);
+            }
+            
+            // Дни месяца
+            for (let day = 1; day <= daysInMonth; day++) {
+                const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                const dayEl = document.createElement('div');
+                dayEl.className = 'calendar-day';
+                
+                const pnlData = dailyPnlData[dateStr];
+                
+                if (pnlData && pnlData.pnl !== 0) {
+                    const isProfit = pnlData.pnl > 0;
+                    dayEl.classList.add(isProfit ? 'profit' : 'loss');
+                    dayEl.innerHTML = `
+                        <span class="date">${day}</span>
+                        <span class="pnl-value">${isProfit ? '+' : ''}$${pnlData.pnl}</span>
+                    `;
+                } else {
+                    dayEl.classList.add('neutral');
+                    dayEl.innerHTML = `<span class="date">${day}</span>`;
+                }
+                
+                grid.appendChild(dayEl);
+            }
+        }
+
+        // Загрузка последних сделок
+        async function loadTrades() {
+            try {
+                const response = await fetch('/api/trades');
+                const trades = await response.json();
+                
+                const list = document.getElementById('tradesList');
+                
+                if (trades.length === 0) {
+                    list.innerHTML = `
+                        <li class="trade-item">
+                            <div class="empty-state">
+                                <p>Нет завершенных сделок</p>
+                            </div>
+                        </li>
+                    `;
+                    return;
+                }
+                
+                list.innerHTML = trades.map(trade => {
+                    const date = new Date(trade.timestamp);
+                    const dateStr = `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}`;
+                    const pnlSign = trade.pnl >= 0 ? '+' : '';
+                    const statusIcon = trade.status === 'win' ? '✅' : '❌';
+                    
+                    return `
+                        <li class="trade-item">
+                            <div class="trade-info">
+                                <span class="trade-symbol">${trade.symbol}</span>
+                                <span class="trade-date">${dateStr}</span>
+                            </div>
+                            <div class="trade-pnl">
+                                <span class="${trade.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}">
+                                    ${pnlSign}$${trade.pnl} (${pnlSign}${trade.pnl_pct}%)
+                                </span>
+                                <span class="trade-status">${statusIcon}</span>
+                            </div>
+                        </li>
+                    `;
+                }).join('');
+            } catch (error) {
+                console.error('Error loading trades:', error);
+            }
+        }
+
+        // Обновление статуса бота
+        function updateStatus(status) {
+            const indicator = document.getElementById('statusIndicator');
+            const text = document.getElementById('statusText');
+            
+            if (status === 'running') {
+                indicator.className = 'status-indicator status-running';
+                text.textContent = '🟢 РАБОТАЕТ';
+            } else if (status === 'stopped') {
+                indicator.className = 'status-indicator status-stopped';
+                text.textContent = '🔴 ОСТАНОВЛЕН';
+            } else {
+                indicator.className = 'status-indicator status-stopped';
+                text.textContent = '⚠️ ОШИБКА';
+            }
+        }
+
+        // Управление ботом
+        async function startBot() {
+            try {
+                const response = await fetch('/api/start_bot', { method: 'POST' });
+                const data = await response.json();
+                showAlert('✅', data.message, 'success');
+            } catch (error) {
+                showAlert('❌', 'Ошибка запуска бота', 'danger');
+            }
+        }
+
+        async function stopBot() {
+            try {
+                const response = await fetch('/api/stop_bot', { method: 'POST' });
+                const data = await response.json();
+                showAlert('⚠️', data.message, 'warning');
+            } catch (error) {
+                showAlert('❌', 'Ошибка остановки бота', 'danger');
+            }
+        }
+
+        async function closePosition(pair) {
+            if (!confirm(`Закрыть позицию ${pair}?`)) return;
+            
+            try {
+                const response = await fetch(`/api/close/${pair}`, { method: 'POST' });
+                const data = await response.json();
+                showAlert('✅', data.message, 'success');
+                setTimeout(loadPositions, 1000);
+            } catch (error) {
+                showAlert('❌', 'Ошибка закрытия позиции', 'danger');
+            }
+        }
+
+        async function emergencyClose(pair) {
+            if (!confirm(`СРОЧНО закрыть позицию ${pair} по рынку?`)) return;
+            
+            try {
+                const response = await fetch(`/api/close/${pair}`, { method: 'POST' });
+                const data = await response.json();
+                showAlert('🚨', `EMERGENCY CLOSE: ${pair}`, 'danger');
+                setTimeout(loadPositions, 1000);
+            } catch (error) {
+                showAlert('❌', 'Ошибка экстренного закрытия', 'danger');
+            }
+        }
+
+        async function closeAllPositions() {
+            if (!confirm('ЗАКРЫТЬ ВСЕ ПОЗИЦИИ? Это действие необратимо!')) return;
+            
+            try {
+                const response = await fetch('/api/close_all', { method: 'POST' });
+                const data = await response.json();
+                showAlert('🚨', data.message, 'danger');
+                setTimeout(loadPositions, 1000);
+            } catch (error) {
+                showAlert('❌', 'Ошибка закрытия всех позиций', 'danger');
+            }
+        }
+
+        // Показ алерта
+        function showAlert(icon, message, type = 'success') {
+            const container = document.getElementById('alertContainer');
+            const alert = document.createElement('div');
+            alert.className = `alert-toast ${type === 'warning' ? 'warning' : type === 'danger' ? 'danger' : ''}`;
+            alert.innerHTML = `
+                <div class="alert-title">${icon}</div>
+                <div class="alert-message">${message}</div>
+            `;
+            
+            container.appendChild(alert);
+            
+            setTimeout(() => {
+                alert.style.animation = 'slideIn 0.3s ease-out reverse';
+                setTimeout(() => alert.remove(), 300);
+            }, 5000);
+        }
+
+        // WebSocket события
+        socket.on('connect', function() {
+            console.log('Connected to server');
+        });
+
+        socket.on('position_update', function(data) {
+            const pnlEl = document.getElementById(`pnl-${data.id}`);
+            const priceEl = document.getElementById(`price-${data.id}`);
+            
+            if (pnlEl) {
+                const pnlSign = data.pnl >= 0 ? '+' : '';
+                pnlEl.textContent = `${pnlSign}$${data.pnl.toFixed(2)} (${pnlSign}${data.pnl_pct.toFixed(2)}%)`;
+                pnlEl.className = `detail-value ${data.pnl >= 0 ? 'pnl-positive' : 'pnl-negative'}`;
+            }
+            
+            if (priceEl) {
+                priceEl.textContent = data.current_price.toFixed(4);
+            }
+        });
+
+        socket.on('alert', function(data) {
+            let icon, message, type;
+            
+            if (data.type === 'profit_10') {
+                icon = '💰';
+                message = `+10% достигнут по ${data.symbol}. Ждем команду на выход.`;
+                type = 'success';
+            } else if (data.type === 'profit_15') {
+                icon = '🚀';
+                message = `+15% достигнут по ${data.symbol}. Фиксируем?`;
+                type = 'warning';
+            } else if (data.type === 'profit_40') {
+                icon = '💎';
+                message = `+40%!!! по ${data.symbol}. СРОЧНО РЕШАЙТЕ!`;
+                type = 'danger';
+            }
+            
+            showAlert(icon, message, type);
+        });
+
+        socket.on('bot_status', function(data) {
+            updateStatus(data.status);
+        });
+    </script>
+</body>
+</html>
