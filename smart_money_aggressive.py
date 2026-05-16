@@ -2298,29 +2298,10 @@ async def main():
     config.DRAWDOWN_ALERT = float(os.getenv('DRAWDOWN_ALERT', '12.0'))
     use_testnet = os.getenv('BINANCE_TESTNET', 'False').lower() == 'true'
     
-    if use_testnet:
-        logger.info("🔧 РЕЖИМ ДЕМО-ТОРГОВЛИ (Binance Testnet Futures)")
-    
     # Проверка наличия ключей
     if not all([API_KEY, API_SECRET, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
-        print("""
-❌ ОШИБКА: Не настроены переменные окружения!
-
-Создайте файл .env или экспортируйте переменные:
-
-export BINANCE_API_KEY='your_api_key'
-export BINANCE_SECRET='your_api_secret'
-# (допустимо и BINANCE_API_SECRET — бот читает оба варианта)
-export TELEGRAM_BOT_TOKEN='your_bot_token'
-export TELEGRAM_CHAT_ID='your_chat_id'
-
-Для создания Telegram бота:
-1. Напишите @BotFather в Telegram
-2. Создайте нового бота командой /newbot
-3. Скопируйте токен
-4. Узнайте свой Chat ID через @userinfobot
-        """)
-        sys.exit(1)
+        logger.warning("⚠️ Не настроены переменные окружения! Бот будет работать только с aiohttp сервером.")
+        logger.warning("   Установите: BINANCE_API_KEY, BINANCE_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID")
     
     # Создание и запуск бота
     bot = SmartMoneyBot(
@@ -2335,21 +2316,19 @@ export TELEGRAM_CHAT_ID='your_chat_id'
     try:
         started = await bot.start()
         if started is False:
-            print(
-                "\n❌ Бот не запущен: нет подключения к Binance Futures.\n"
-                f"   Файл настроек (должен существовать): {_root / '.env'}\n"
-                "   Переменные: BINANCE_API_KEY и BINANCE_SECRET (или BINANCE_API_SECRET).\n"
-                "   На Binance: права «Чтение» + «USDT-M Futures»; при whitelist — ваш IP в списке.\n",
-                file=sys.stderr,
-            )
-            sys.exit(2)
+            logger.warning("⚠️ Бот не подключился к Binance. Повторная попытка через 60 сек...")
+            # Не выходим, а ждём и пробуем снова
+            while True:
+                await asyncio.sleep(60)
+                started = await bot.start()
+                if started:
+                    break
     except KeyboardInterrupt:
         logger.info("Остановка по Ctrl+C")
         await bot.stop()
     except Exception as e:
         logger.error(f"Критическая ошибка: {e}")
         await bot.stop()
-        raise
 
 
 if __name__ == '__main__':

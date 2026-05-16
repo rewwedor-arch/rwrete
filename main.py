@@ -42,25 +42,36 @@ def load_env_from_docker_secrets():
                 logger.info(f"✅ Secret '{secret_name}' загружен из /run/secrets/")
 
 
+async def run_bot():
+    """Запуск торгового бота с обработкой ошибок"""
+    from smart_money_aggressive import main as bot_main
+    try:
+        await bot_main()
+    except KeyboardInterrupt:
+        logger.info("Остановка бота по Ctrl+C")
+    except Exception as e:
+        logger.error(f"Ошибка бота: {e}. Перезапуск через 60 сек...")
+        await asyncio.sleep(60)
+        # Рекурсивный перезапуск
+        await run_bot()
+
+
 async def main():
     """Точка входа — запуск aiohttp + торгового бота"""
     # Загружаем secrets из Docker/Hugging Face
     load_env_from_docker_secrets()
 
-    # Импортируем бота после загрузки переменных окружения
-    from smart_money_aggressive import main as bot_main
-
     # Запускаем aiohttp сервер
     runner = await start_aiohttp_server()
 
-    # Запускаем торгового бота
+    # Запускаем торгового бота в фоне
+    bot_task = asyncio.create_task(run_bot())
+
+    # Держим сервер живым
     try:
-        await bot_main()
-    except KeyboardInterrupt:
-        logger.info("Остановка по Ctrl+C")
-    except Exception as e:
-        logger.error(f"Критическая ошибка: {e}")
-        raise
+        await bot_task
+    except asyncio.CancelledError:
+        pass
     finally:
         await runner.cleanup()
 
