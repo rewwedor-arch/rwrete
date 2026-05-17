@@ -1915,8 +1915,9 @@ class SmartMoneyBot:
             logger.error(f"Ошибка отправки часового отчёта: {e}")
     
     async def run_hourly_report_loop(self):
-        """Цикл отправки часовых отчётов отключен (теперь по кнопке)"""
-        pass
+        """Цикл отправки часовых отчётов отключен (теперь по кнопке) — просто спим бесконечно"""
+        while self.is_running:
+            await asyncio.sleep(3600)
     
     # ========================================================================
     # TELEGRAM КОМАНДЫ И КНОПКИ
@@ -2182,38 +2183,65 @@ class SmartMoneyBot:
         
         # Обработчик текстовых кнопок
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
-    
+
     async def run_telegram_bot(self):
-        """Запуск Telegram бота"""
+        """Запуск Telegram бота с авто-перезапуском при обрыве соединения"""
         try:
             logger.info("Инициализация Telegram бота...")
             await self.app.initialize()
             await self.app.start()
-            
-            # Установка меню команд в самом Telegram (синяя кнопка Меню)
+
+            # Установка меню команд
             try:
                 from telegram import BotCommand
                 commands = [
                     BotCommand("start", "Показать кнопки управления"),
                     BotCommand("balance", "Текущий баланс"),
                     BotCommand("positions", "Открытые сделки"),
+                    BotCommand("signals", "Последние сигналы"),
+                    BotCommand("close", "Закрыть сделку"),
+                    BotCommand("close_all", "Закрыть все сделки"),
+                    BotCommand("start_bot", "Включить бота"),
+                    BotCommand("stop_bot", "Выключить бота"),
+                    BotCommand("emergency", "Экстренная остановка"),
                     BotCommand("daily_report", "Статистика"),
-                    BotCommand("close_all", "Закрыть все сделки")
                 ]
                 await self.app.bot.set_my_commands(commands)
             except Exception as e:
                 logger.warning(f"Не удалось установить меню команд: {e}")
-                
-            await self.app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-            logger.info("Telegram бот успешно запущен и опрашивает обновления")
-            
-            # Держим цикл живым
+
+            # Авто-перезапуск polling при обрыве
             while self.is_running:
-                await asyncio.sleep(1)
-                
+                try:
+                    logger.info("Запуск Telegram polling...")
+                    await self.app.updater.start_polling(
+                        allowed_updates=Update.ALL_TYPES,
+                        drop_pending_updates=True,
+                        read_timeout=30,
+                        connect_timeout=30,
+                    )
+                    logger.info("Telegram бот успешно запущен и опрашивает обновления")
+
+                    # Держим цикл живым, пока работает polling
+                    while self.is_running and self.app.updater.running:
+                        await asyncio.sleep(5)
+
+                    # Если вышли из цикла — polling остановился
+                    if self.is_running:
+                        logger.warning("Telegram polling остановлен. Перезапуск через 10 сек...")
+                        await asyncio.sleep(10)
+
+                except Exception as e:
+                    logger.error(f"Ошибка Telegram polling: {e}. Перезапуск через 15 сек...")
+                    try:
+                        await self.app.updater.stop()
+                    except Exception:
+                        pass
+                    await asyncio.sleep(15)
+
         except Exception as e:
             logger.error(f"Критическая ошибка в Telegram боте: {e}")
-    
+
     async def start(self) -> bool:
         """Запуск бота. Возвращает False, если биржа недоступна (процесс можно завершить с кодом ≠ 0)."""
         logger.info("Запуск Smart Money Aggressive Bot...")
@@ -2250,9 +2278,16 @@ class SmartMoneyBot:
             asyncio.create_task(self.run_telegram_bot())
         ]
         
-        await asyncio.gather(*tasks, return_exceptions=True)
+        # Ждём завершения всех задач (gather завершится только если все упадут)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Если дошли сюда — все задачи завершились, что-то пошло не так
+        logger.error(f"All tasks finished! Results: {results}")
+        
+        # Ждём перед возможным перезапуском из main.py
+        await asyncio.sleep(60)
         return True
-    
+
     async def stop(self):
         """Остановка бота"""
         logger.info("Остановка бота...")
