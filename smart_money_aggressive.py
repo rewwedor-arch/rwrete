@@ -17,6 +17,7 @@ import logging
 import sqlite3
 import os
 import sys
+import threading
 
 # Fix Unicode encoding for Windows console (cp1251 -> utf-8)
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
@@ -2472,6 +2473,7 @@ class SmartMoneyBot:
 
     async def run_telegram_bot(self):
         """Запуск Telegram бота с авто-перезапуском"""
+        import threading
         from telegram.ext import MessageHandler, filters
 
         while self.is_running:
@@ -2522,16 +2524,34 @@ class SmartMoneyBot:
                     logger.warning(f"Не удалось установить меню: {e}")
 
                 self.app = app
-                logger.info("Telegram бот запускается...")
+                logger.info("Telegram бот запускается в отдельном потоке...")
 
-                # Запускаем polling
-                await app.initialize()
-                await app.start()
-                await app.updater.start_polling(
-                    allowed_updates=Update.ALL_TYPES,
-                    drop_pending_updates=True,
-                )
-                logger.info("Telegram polling запущен")
+                # Запускаем polling в отдельном потоке
+                polling_done = threading.Event()
+                polling_error = [None]
+
+                def run_polling():
+                    try:
+                        app.run_polling(
+                            allowed_updates=Update.ALL_TYPES,
+                            drop_pending_updates=True,
+                        )
+                    except Exception as e:
+                        polling_error[0] = e
+                    finally:
+                        polling_done.set()
+
+                polling_thread = threading.Thread(target=run_polling, daemon=True)
+                polling_thread.start()
+
+                # Даём время на запуск polling
+                await asyncio.sleep(3)
+
+                # Проверяем что polling запустился
+                if polling_done.is_set():
+                    logger.error(f"Polling завершился сразу: {polling_error[0]}")
+                    await asyncio.sleep(15)
+                    continue
 
                 # Уведомление о запуске
                 for chat_id in self.active_chat_ids:
@@ -2543,20 +2563,17 @@ class SmartMoneyBot:
                     except Exception:
                         pass
 
+                logger.info("Telegram polling запущен")
+
                 # Ждём пока бот работает
-                while self.is_running and app.updater.running:
+                while self.is_running:
                     await asyncio.sleep(10)
+                    if polling_done.is_set():
+                        logger.warning("Polling остановился, перезапуск...")
+                        break
 
             except Exception as e:
                 logger.error(f"Ошибка Telegram бота: {e}")
-
-            # Остановка перед перезапуском
-            try:
-                await app.updater.stop()
-                await app.stop()
-                await app.shutdown()
-            except Exception:
-                pass
 
             if self.is_running:
                 logger.info("Перезапуск Telegram бота через 15 сек...")
