@@ -129,6 +129,11 @@ class StrategyConfig:
     # Время позиции
     POSITION_TIMEOUT_HOURS: int = 36
 
+    # Трейлинг-стоп (в % цены, без плеча)
+    TRAILING_ACTIVATE_PCT: float = 1.0      # Активировать трейлинг при +1% цены
+    TRAILING_DISTANCE_PCT: float = 0.5      # Дистанция SL от пика (0.5% цены)
+    TRAILING_BREAKEVEN_PCT: float = 0.2     # Безубыток: SL на 0.2% от входа
+
 config = StrategyConfig()
 
 # ============================================================================
@@ -182,6 +187,99 @@ async def check_fear_greed_index(bot: 'SmartMoneyBot'):
             logger.error(f"Ошибка проверки Fear & Greed Index: {e}")
 
         await asyncio.sleep(1800)
+
+
+async def trailing_stop_loop(bot: 'SmartMoneyBot'):
+    """Фоновый трейлинг-стоп: проверка каждые 10 секунд.
+    При профите > TRAILING_ACTIVATE_PCT — двигает SL в безубыток и далее за ценой.
+    """
+    while bot.is_running:
+        try:
+            for pid, pos in list(bot.positions.items()):
+                try:
+                    ticker = await bot.exchange.fetch_ticker(pos.symbol)
+                    current_price = ticker['last']
+
+                    # Расчет изменения цены в % (без плеча)
+                    if pos.side == 'SHORT':
+                        price_change_pct = ((pos.entry_price - current_price) / pos.entry_price) * 100
+                    else:
+                        price_change_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100
+
+                    # Активация трейлинга при профите > 1%
+                    if price_change_pct >= config.TRAILING_ACTIVATE_PCT:
+                        if not pos.trailing_active:
+                            pos.trailing_active = True
+                            pos.trailing_peak = price_change_pct
+                            logger.info(f"Трейлинг активирован {pos.symbol}: {price_change_pct:+.2f}%")
+
+                        # Обновление пика
+                        if price_change_pct > pos.trailing_peak:
+                            pos.trailing_peak = price_change_pct
+
+                        # Расчет нового SL: на расстоянии TRAILING_DISTANCE_PCT от пика
+                        if pos.side == 'SHORT':
+                            # Для SHORT: SL двигается вниз (цена растёт → SL растёт)
+                            new_sl_price = pos.entry_price * (1 - (pos.trailing_peak - config.TRAILING_DISTANCE_PCT) / 100)
+                        else:
+                            # Для LONG: SL двигается вверх (цена растёт → SL растёт)
+                            new_sl_price = pos.entry_price * (1 + (pos.trailing_peak - config.TRAILING_DISTANCE_PCT) / 100)
+
+                        # Проверяем что новый SL лучше текущего
+                        should_update = False
+                        if pos.side == 'SHORT':
+                            # Для SHORT: SL должен быть ниже текущего (двигаться вниз за ценой)
+                            if new_sl_price < pos.stop_loss:
+                                should_update = True
+                        else:
+                            # Для LONG: SL должен быть выше текущего (двигаться вверх за ценой)
+                            if new_sl_price > pos.stop_loss:
+                                should_update = True
+
+                        # Минимальный SL — безубыток + 0.2%
+                        if pos.side == 'SHORT':
+                            min_sl = pos.entry_price * (1 + config.TRAILING_BREAKEVEN_PCT / 100)
+                            if new_sl_price > min_sl:
+                                new_sl_price = min_sl
+                        else:
+                            min_sl = pos.entry_price * (1 - config.TRAILING_BREAKEVEN_PCT / 100)
+                            if new_sl_price < min_sl:
+                                new_sl_price = min_sl
+
+                        if should_update:
+                            new_sl_price = float(bot.exchange.price_to_precision(pos.symbol, new_sl_price))
+                            old_sl = pos.stop_loss
+                            pos.stop_loss = new_sl_price
+                            logger.info(
+                                f"Трейлинг SL {pos.symbol}: {old_sl:.4f} → {new_sl_price:.4f} "
+                                f"(пик: {pos.trailing_peak:+.2f}%)"
+                            )
+
+                            # Отправляем новый SL на биржу
+                            try:
+                                # Удаляем старый SL и ставим новый
+                                await bot.exchange.cancel_all_orders(pos.symbol)
+                                if pos.side == 'SHORT':
+                                    await bot.exchange.create_order(
+                                        pos.symbol, 'stop_market', 'buy', pos.remaining_quantity,
+                                        params={'stopPrice': new_sl_price, 'reduceOnly': True}
+                                    )
+                                else:
+                                    await bot.exchange.create_order(
+                                        pos.symbol, 'stop_market', 'sell', pos.remaining_quantity,
+                                        params={'stopPrice': new_sl_price, 'reduceOnly': True}
+                                    )
+                            except Exception as e:
+                                logger.warning(f"Не удалось обновить SL на бирже для {pos.symbol}: {e}")
+
+                except Exception as e:
+                    logger.error(f"Ошибка трейлинга для {pos.symbol}: {e}")
+
+        except Exception as e:
+            logger.error(f"Ошибка в trailing_stop_loop: {e}")
+
+        await asyncio.sleep(10)
+
 
 class Database:
     """SQLite база данных для истории сделок и статистики"""
@@ -2415,7 +2513,8 @@ class SmartMoneyBot:
             asyncio.create_task(task_with_log("daily_report", self.run_daily_report_loop())),
             asyncio.create_task(task_with_log("hourly_report", self.run_hourly_report_loop())),
             asyncio.create_task(task_with_log("telegram", self.run_telegram_bot())),
-            asyncio.create_task(task_with_log("fear_greed", check_fear_greed_index(self)))
+            asyncio.create_task(task_with_log("fear_greed", check_fear_greed_index(self))),
+            asyncio.create_task(task_with_log("trailing_stop", trailing_stop_loop(self)))
         ]
         
         # Ждём завершения всех задач (gather завершится только если все упадут)
