@@ -131,10 +131,57 @@ class StrategyConfig:
 
 config = StrategyConfig()
 
+# ============================================================================
+# ПРЕДОХРАНИТЕЛЬ: НОВОСТНОЙ ФОН / НАСТРОЕНИЕ РЫНКА
+# ============================================================================
+ALLOW_TRADING = True
 
-# ============================================================================
-# БАЗА ДАННЫХ
-# ============================================================================
+async def check_fear_greed_index(bot: 'SmartMoneyBot'):
+    """Фоновая проверка Crypto Fear & Greed Index каждые 30 минут.
+    При Extreme Fear (< 25) — приостановка открытия новых сделок.
+    """
+    global ALLOW_TRADING
+    import aiohttp as _aiohttp
+
+    while bot.is_running:
+        try:
+            async with _aiohttp.ClientSession() as session:
+                async with session.get(
+                    "https://api.alternative.me/fng/?limit=1",
+                    timeout=15
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data.get("data"):
+                            entry = data["data"][0]
+                            value = int(entry.get("value", 50))
+                            classification = entry.get("value_classification", "Neutral")
+
+                            logger.info(f"Fear & Greed Index: {value} ({classification})")
+
+                            if value < 25 and ALLOW_TRADING:
+                                ALLOW_TRADING = False
+                                msg = (
+                                    f"⚠️ На рынке паника!\n"
+                                    f"Fear & Greed Index: {value} ({classification})\n"
+                                    f"Открытие новых сделок приостановлено."
+                                )
+                                await bot.send_telegram_message(msg)
+                                logger.warning(msg)
+
+                            elif value >= 25 and not ALLOW_TRADING:
+                                ALLOW_TRADING = True
+                                msg = (
+                                    f"✅ Рынок успокоился.\n"
+                                    f"Fear & Greed Index: {value} ({classification})\n"
+                                    f"Торговля возобновлена."
+                                )
+                                await bot.send_telegram_message(msg)
+                                logger.info(msg)
+        except Exception as e:
+            logger.error(f"Ошибка проверки Fear & Greed Index: {e}")
+
+        await asyncio.sleep(1800)
 
 class Database:
     """SQLite база данных для истории сделок и статистики"""
@@ -1129,6 +1176,10 @@ class SmartMoneyBot:
     async def open_position(self, symbol: str, entry_price: float,
                             smc_result: Dict) -> Optional[Position]:
         """Открытие позиции (LONG или SHORT)"""
+        global ALLOW_TRADING
+        if not ALLOW_TRADING:
+            logger.info(f"Сигнал {symbol} пойман, но торговля приостановлена (новостной фон)")
+            return None
         try:
             direction = smc_result.get('direction', 'LONG')
             
@@ -2363,7 +2414,8 @@ class SmartMoneyBot:
             asyncio.create_task(task_with_log("monitoring", self.run_monitoring_loop())),
             asyncio.create_task(task_with_log("daily_report", self.run_daily_report_loop())),
             asyncio.create_task(task_with_log("hourly_report", self.run_hourly_report_loop())),
-            asyncio.create_task(task_with_log("telegram", self.run_telegram_bot()))
+            asyncio.create_task(task_with_log("telegram", self.run_telegram_bot())),
+            asyncio.create_task(task_with_log("fear_greed", check_fear_greed_index(self)))
         ]
         
         # Ждём завершения всех задач (gather завершится только если все упадут)
