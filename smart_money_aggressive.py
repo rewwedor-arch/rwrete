@@ -1472,15 +1472,35 @@ class SmartMoneyBot:
                 logger.warning(f"Нечего закрывать по позиции {position_id}")
                 return False
             
+            logger.info(f"Пытаюсь закрыть позицию {symbol}, количество: {qty_close}, тип: {position.side}")
+            
             # Закрытие: для LONG продаём, для SHORT покупаем
-            if position.side == 'SHORT':
-                order = await self.exchange.create_market_buy_order(
-                    symbol, qty_close, params={'reduceOnly': True}
-                )
-            else:
-                order = await self.exchange.create_market_sell_order(
-                    symbol, qty_close, params={'reduceOnly': True}
-                )
+            try:
+                if position.side == 'SHORT':
+                    order = await self.exchange.create_market_buy_order(
+                        symbol, qty_close, params={'reduceOnly': True}
+                    )
+                else:
+                    order = await self.exchange.create_market_sell_order(
+                        symbol, qty_close, params={'reduceOnly': True}
+                    )
+                
+                logger.info(f"Ордер на закрытие размещен: {order.get('id', 'N/A')}, статус: {order.get('status', 'N/A')}")
+            except Exception as order_e:
+                logger.error(f"Ошибка при создании ордера закрытия {symbol}: {order_e}")
+                # Пробуем получить актуальные цены и закрыть принудительно
+                try:
+                    ticker = await self.exchange.fetch_ticker(symbol)
+                    current_price = ticker['last']
+                    logger.info(f"Текущая цена {symbol}: {current_price}")
+                    
+                    # Пробуем закрыть принудительно, даже если ордер не прошел
+                    await self.exchange.cancel_all_orders(symbol)
+                    logger.info(f"Отменены все ордера для {symbol}")
+                except Exception as cleanup_e:
+                    logger.error(f"Ошибка при очистке ордеров {symbol}: {cleanup_e}")
+                
+                raise order_e
             
             # Очистка оставшихся ордеров (SL/TP)
             try:
@@ -1550,14 +1570,26 @@ class SmartMoneyBot:
             
         except Exception as e:
             logger.error(f"Ошибка закрытия позиции {position_id}: {e}")
-            await self.send_telegram_message(f"❌ Ошибка закрытия: {e}")
+            error_msg = f"❌ Ошибка закрытия позиции {position_id}: {str(e)}"
+            await self.send_telegram_message(error_msg)
             return False
     
     async def close_all_positions(self, emergency: bool = False):
         """Закрытие всех позиций"""
         position_ids = list(self.positions.keys())
-        for pid in position_ids:
-            await self.close_position(pid, emergency)
+        logger.info(f"Начинаю закрытие {len(position_ids)} позиций, emergency={emergency}")
+        
+        closed_count = 0
+        for i, pid in enumerate(position_ids):
+            logger.info(f"Закрываю позицию {i+1}/{len(position_ids)}: {pid}")
+            success = await self.close_position(pid, emergency)
+            if success:
+                closed_count += 1
+            # Небольшая задержка между закрытиями, чтобы избежать флуда в API
+            await asyncio.sleep(0.5)
+        
+        logger.info(f"Завершено закрытие всех позиций: {closed_count}/{len(position_ids)} успешно")
+        await self.send_telegram_message(f"✅ Закрытие всех позиций завершено: {closed_count}/{len(position_ids)} успешно")
 
     async def close_partial_position(self, position: Position, qty_to_close: float, current_price: float):
         """Частичное закрытие позиции"""
@@ -2185,6 +2217,7 @@ class SmartMoneyBot:
     
     async def cmd_balance(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /balance"""
+        logger.info(f"Получена команда /balance от {update.effective_chat.id}")
         try:
             balance = await self.exchange.fetch_balance()
             usdt_balance = balance.get('USDT', {}).get('total', 0)
@@ -2202,9 +2235,11 @@ class SmartMoneyBot:
             await update.message.reply_text(message)
         except Exception as e:
             await update.message.reply_text(f"Ошибка получения баланса: {e}")
-    
+            logger.error(f"Ошибка в cmd_balance: {e}")
+
     async def cmd_positions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /positions"""
+        logger.info(f"Получена команда /positions от {update.effective_chat.id}")
         if not self.positions:
             await update.message.reply_text("Нет открытых позиций")
             return
@@ -2238,6 +2273,7 @@ class SmartMoneyBot:
     
     async def cmd_signals(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /signals"""
+        logger.info(f"Получена команда /signals от {update.effective_chat.id}")
         # Упрощенная реализация - последние 10 сигналов
         message = "📡 ПОСЛЕДНИЕ СИГНАЛЫ\n\n"
         message += f"Сегодня: {self.signals_today}/{self.max_signals_per_day}\n"
@@ -2245,7 +2281,8 @@ class SmartMoneyBot:
         await update.message.reply_text(message)
     
     async def cmd_close(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Команда /close {PAIR}"""
+        """Команда /close"""
+        logger.info(f"Получена команда /close от {update.effective_chat.id}")
         if not context.args:
             await update.message.reply_text("Использование: /close {PAIR}\nПример: /close BTC")
             return
@@ -2258,34 +2295,43 @@ class SmartMoneyBot:
         for pid, pos in self.positions.items():
             if pos.symbol.startswith(f"{pair}/"):
                 found = pid
+                logger.info(f"Найдена позиция {pid} для символа {symbol}")
                 break
         
         if not found:
             await update.message.reply_text(f"Позиция по {pair} не найдена")
+            logger.info(f"Позиция для символа {symbol} не найдена")
             return
         
+        await update.message.reply_text(f"Закрываю позицию по {symbol}...")
         await self.close_position(found)
     
     async def cmd_close_all(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /close_all"""
+        logger.info(f"Получена команда /close_all от {update.effective_chat.id}")
         if not self.positions:
             await update.message.reply_text("Нет открытых позиций")
+            logger.info("Нет открытых позиций для закрытия")
             return
         
+        logger.info(f"Пользователь инициировал закрытие {len(self.positions)} позиций")
         await update.message.reply_text(f"Закрываю {len(self.positions)} позиций...")
         await self.close_all_positions()
     
     async def cmd_emergency(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /emergency"""
+        logger.info(f"Получена команда /emergency от {update.effective_chat.id}")
         await update.message.reply_text("🚨 ЭКСТРЕННОЕ ЗАКРЫТИЕ ВСЕХ ПОЗИЦИЙ!")
         await self.close_all_positions(emergency=True)
     
     async def cmd_daily_report(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /daily_report"""
+        logger.info(f"Получена команда /daily_report от {update.effective_chat.id}")
         await self.send_daily_report()
 
     async def cmd_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /stats — полная статистика: баланс, PnL, winrate, открытые позиции"""
+        logger.info(f"Получена команда /stats от {update.effective_chat.id}")
         try:
             # 1. Баланс с Binance
             balance = await self.exchange.fetch_balance()
@@ -2365,7 +2411,8 @@ class SmartMoneyBot:
             await update.message.reply_text(f"Ошибка получения статистики: {e}")
 
     async def cmd_stop_trading(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Команда /stop_trading — остановить торговлю и закрыть позиции с минимальными потерями"""
+        """Команда /stop_trading"""
+        logger.info(f"Получена команда /stop_trading от {update.effective_chat.id}")
         if not self.is_running:
             await update.message.reply_text("🔴 Бот уже остановлен!")
             return
@@ -2420,7 +2467,8 @@ class SmartMoneyBot:
         await self.send_telegram_message(msg)
 
     async def cmd_start_bot(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Команда /start_bot — включить бота"""
+        """Команда /start_bot"""
+        logger.info(f"Получена команда /start_bot от {update.effective_chat.id}")
         if self.is_running:
             await update.message.reply_text("🟢 Бот уже работает!")
             return
@@ -2432,11 +2480,13 @@ class SmartMoneyBot:
         await self.send_telegram_message("🟢 Бот включён оператором. Торговля возобновлена.")
     
     async def cmd_stop_bot(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Команда /stop_bot — выключить бота (без закрытия позиций)"""
+        """Команда /stop_bot"""
+        logger.info(f"Получена команда /stop_bot от {update.effective_chat.id}")
         if not self.is_running:
             await update.message.reply_text("🔴 Бот уже остановлен!")
             return
         self.is_running = False
+
         await update.message.reply_text(
             "🔴 БОТ ВЫКЛЮЧЕН!\n"
             "Новые сделки не открываются.\n"
@@ -2465,6 +2515,58 @@ class SmartMoneyBot:
         
         # Обработчик текстовых кнопок
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
+
+    async def start_telegram_bot(self):
+        """Старт Telegram бота с правильным управлением событийным циклом"""
+        try:
+            # Используем глобальный event loop
+            loop = asyncio.get_event_loop()
+            
+            # Создаем Application с указанием event loop
+            self.app = Application.builder().token(self.telegram_token).loop(loop).build()
+
+            # Добавляем обработчики команд
+            self.app.add_handler(CommandHandler("start", self.cmd_start))
+            self.app.add_handler(CommandHandler("balance", self.cmd_balance))
+            self.app.add_handler(CommandHandler("positions", self.cmd_positions))
+            self.app.add_handler(CommandHandler("signals", self.cmd_signals))
+            self.app.add_handler(CommandHandler("close", self.cmd_close))
+            self.app.add_handler(CommandHandler("close_all", self.cmd_close_all))
+            self.app.add_handler(CommandHandler("start_bot", self.cmd_start_bot))
+            self.app.add_handler(CommandHandler("stop_bot", self.cmd_stop_bot))
+            self.app.add_handler(CommandHandler("emergency", self.cmd_emergency))
+            self.app.add_handler(CommandHandler("daily_report", self.cmd_daily_report))
+            self.app.add_handler(CommandHandler("stop_trading", self.cmd_stop_trading))
+            self.app.add_handler(CommandHandler("stats", self.cmd_stats))
+            from telegram.ext import MessageHandler, filters
+            self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
+
+            # Включаем логирование для отладки
+            self.app.add_error_handler(self.error_handler)
+
+            logger.info("Telegram bot initialized successfully")
+
+            # Initialize and start the application properly
+            await self.app.initialize()
+            await self.app.start()
+
+            # Start the updater separately
+            if not self.app.updater._running:
+                await self.app.updater.start_polling(
+                    bootstrap_retries=3,
+                    drop_pending_updates=True,
+                    allowed_updates=Update.ALL_TYPES
+                )
+
+            logger.info("Telegram polling started")
+
+            # Ждем пока бот работает
+            while self.is_running:
+                await asyncio.sleep(1)
+
+        except Exception as e:
+            logger.error(f"Failed to start Telegram bot: {e}")
+            raise
 
     async def run_telegram_bot(self):
         """Запуск Telegram бота с авто-перезапуском"""
@@ -2527,17 +2629,51 @@ class SmartMoneyBot:
 
                 def run_polling():
                     try:
+                        logger.info("Начинаю запуск polling для Telegram бота")
                         app.run_polling(
                             allowed_updates=Update.ALL_TYPES,
                             drop_pending_updates=True,
                         )
+                        logger.info("Polling для Telegram бота завершен")
                     except Exception as e:
+                        logger.error(f"Ошибка в polling: {e}")
+
+                polling_thread = threading.Thread(target=run_polling)
+                polling_thread.start()
+
+                try:
+                    polling_thread.join()
+                except KeyboardInterrupt:
+                    logger.info("Получен сигнал завершения работы бота")
+                    polling_done.set()
+                    polling_thread.join()
+
+                if polling_error[0]:
+                    raise polling_error[0]
+
+            except Exception as e:
+                logger.error(f"Ошибка при запуске Telegram бота: {e}")
+
+    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик ошибок"""
+        logger.error(f"Error in Telegram handler: {context.error}")
+        if update:
+            try:
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id if update.effective_chat else next(iter(self.active_chat_ids), None),
+                    text="❌ Произошла ошибка при обработке вашего запроса. Пожалуйста, попробуйте позже."
+                )
+            except Exception as e:
+                logger.error(f"Error sending error message to user: {e}")
+
                         polling_error[0] = e
                     finally:
                         polling_done.set()
+                        logger.info("Поток polling завершен")
 
                 polling_thread = threading.Thread(target=run_polling, daemon=True)
                 polling_thread.start()
+                logger.info("Поток polling запущен, ожидаем запуска...")
 
                 # Даём время на запуск polling
                 await asyncio.sleep(3)
@@ -2547,6 +2683,8 @@ class SmartMoneyBot:
                     logger.error(f"Polling завершился сразу: {polling_error[0]}")
                     await asyncio.sleep(15)
                     continue
+                else:
+                    logger.info("Polling успешно запущен и работает")
 
                 # Уведомление о запуске
                 for chat_id in self.active_chat_ids:
@@ -2555,7 +2693,8 @@ class SmartMoneyBot:
                             chat_id=chat_id,
                             text="🟢 БОТ ЗАПУЩЕН\nИспользуйте /start для меню"
                         )
-                    except Exception:
+                    except Exception as e:
+                        logger.error(f"Ошибка отправки сообщения в чат {chat_id}: {e}")
                         pass
 
                 logger.info("Telegram polling запущен")
@@ -2606,7 +2745,7 @@ class SmartMoneyBot:
             asyncio.create_task(task_with_log("monitoring", self.run_monitoring_loop())),
             asyncio.create_task(task_with_log("daily_report", self.run_daily_report_loop())),
             asyncio.create_task(task_with_log("hourly_report", self.run_hourly_report_loop())),
-            asyncio.create_task(task_with_log("telegram", self.run_telegram_bot())),
+            asyncio.create_task(task_with_log("telegram", self.start_telegram_bot())),
             asyncio.create_task(task_with_log("fear_greed", check_fear_greed_index(self))),
             asyncio.create_task(task_with_log("trailing_stop", trailing_stop_loop(self)))
         ]
