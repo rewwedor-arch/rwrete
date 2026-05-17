@@ -2187,74 +2187,92 @@ class SmartMoneyBot:
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
 
     async def run_telegram_bot(self):
-        """Запуск Telegram бота с авто-перезапуском при обрыве соединения"""
-        try:
-            logger.info("Инициализация Telegram бота...")
-            await self.app.initialize()
-            await self.app.start()
+        """Запуск Telegram бота с авто-перезапуском"""
+        from telegram.ext import MessageHandler, filters
 
-            # Установка меню команд
+        while self.is_running:
             try:
-                from telegram import BotCommand
-                commands = [
-                    BotCommand("start", "Показать кнопки управления"),
-                    BotCommand("balance", "Текущий баланс"),
-                    BotCommand("positions", "Открытые сделки"),
-                    BotCommand("signals", "Последние сигналы"),
-                    BotCommand("close", "Закрыть сделку"),
-                    BotCommand("close_all", "Закрыть все сделки"),
-                    BotCommand("start_bot", "Включить бота"),
-                    BotCommand("stop_bot", "Выключить бота"),
-                    BotCommand("emergency", "Экстренная остановка"),
-                    BotCommand("daily_report", "Статистика"),
-                ]
-                await self.app.bot.set_my_commands(commands)
-            except Exception as e:
-                logger.warning(f"Не удалось установить меню команд: {e}")
+                logger.info("Инициализация Telegram бота...")
+                app = Application.builder().token(self.telegram_token).build()
 
-            # Авто-перезапуск polling при обрыве
-            while self.is_running:
+                # Регистрация обработчиков
+                app.add_handler(CommandHandler("start", self.cmd_start))
+                app.add_handler(CommandHandler("balance", self.cmd_balance))
+                app.add_handler(CommandHandler("positions", self.cmd_positions))
+                app.add_handler(CommandHandler("signals", self.cmd_signals))
+                app.add_handler(CommandHandler("close", self.cmd_close))
+                app.add_handler(CommandHandler("close_all", self.cmd_close_all))
+                app.add_handler(CommandHandler("start_bot", self.cmd_start_bot))
+                app.add_handler(CommandHandler("stop_bot", self.cmd_stop_bot))
+                app.add_handler(CommandHandler("emergency", self.cmd_emergency))
+                app.add_handler(CommandHandler("daily_report", self.cmd_daily_report))
+                app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
+
+                # Меню команд
                 try:
-                    logger.info("Запуск Telegram polling...")
-                    await self.app.updater.start_polling(
-                        allowed_updates=Update.ALL_TYPES,
-                        drop_pending_updates=True,
-                        read_timeout=30,
-                        connect_timeout=30,
-                        pool_timeout=30,
-                    )
-                    logger.info("Telegram бот успешно запущен и опрашивает обновления")
-
-                    # Держим цикл живым с проверкой соединения
-                    while self.is_running:
-                        await asyncio.sleep(30)
-                        # Проверяем что polling ещё работает
-                        if not self.app.updater.running:
-                            logger.warning("Telegram polling остановлен")
-                            break
-                        # Пингуем API чтобы убедиться что соединение живо
-                        try:
-                            await asyncio.wait_for(
-                                self.app.bot.get_me(),
-                                timeout=15
-                            )
-                        except Exception:
-                            logger.warning("Telegram API не отвечает, перезапуск polling...")
-                            break
-
+                    from telegram import BotCommand
+                    await app.bot.set_my_commands([
+                        BotCommand("start", "Показать кнопки управления"),
+                        BotCommand("balance", "Текущий баланс"),
+                        BotCommand("positions", "Открытые сделки"),
+                        BotCommand("signals", "Последние сигналы"),
+                        BotCommand("close", "Закрыть сделку"),
+                        BotCommand("close_all", "Закрыть все сделки"),
+                        BotCommand("start_bot", "Включить бота"),
+                        BotCommand("stop_bot", "Выключить бота"),
+                        BotCommand("emergency", "Экстренная остановка"),
+                        BotCommand("daily_report", "Статистика"),
+                    ])
                 except Exception as e:
-                    logger.error(f"Ошибка Telegram polling: {e}. Перезапуск через 15 сек...")
+                    logger.warning(f"Не удалось установить меню: {e}")
 
-                # Останавливаем polling перед перезапуском
-                if self.is_running:
+                self.app = app
+                logger.info("Telegram бот запускается...")
+
+                # Запускаем polling с таймаутами
+                await app.initialize()
+                await app.start()
+                await app.updater.start_polling(
+                    allowed_updates=Update.ALL_TYPES,
+                    drop_pending_updates=True,
+                    read_timeout=20,
+                    connect_timeout=20,
+                    pool_timeout=20,
+                    request_timeout=20,
+                )
+                logger.info("Telegram polling запущен")
+
+                # Уведомление о запуске
+                for chat_id in self.active_chat_ids:
                     try:
-                        await asyncio.wait_for(self.app.updater.stop(), timeout=10)
+                        await app.bot.send_message(
+                            chat_id=chat_id,
+                            text="🟢 БОТ ЗАПУЩЕН\nИспользуйте /start для меню"
+                        )
                     except Exception:
                         pass
-                    await asyncio.sleep(15)
 
-        except Exception as e:
-            logger.error(f"Критическая ошибка в Telegram боте: {e}")
+                # Ждём пока бот работает, проверяем каждые 30 сек
+                while self.is_running:
+                    await asyncio.sleep(30)
+                    if not app.updater.running:
+                        logger.warning("Polling остановлен, перезапуск...")
+                        break
+
+            except Exception as e:
+                logger.error(f"Ошибка Telegram бота: {e}")
+
+            # Остановка перед перезапуском
+            try:
+                await app.updater.stop()
+                await app.stop()
+                await app.shutdown()
+            except Exception:
+                pass
+
+            if self.is_running:
+                logger.info("Перезапуск Telegram бота через 15 сек...")
+                await asyncio.sleep(15)
 
     async def start(self) -> bool:
         """Запуск бота. Возвращает False, если биржа недоступна (процесс можно завершить с кодом ≠ 0)."""
@@ -2271,17 +2289,8 @@ class SmartMoneyBot:
         
         self.is_running = True
         
-        # Настройка Telegram
-        self.setup_telegram_handlers()
-        
-        # Уведомление о запуске
-        try:
-            await self.send_telegram_message(
-                "🟢 БОТ ЗАПУЩЕН И ГОТОВ К РАБОТЕ\n"
-                "Используйте команду /start для вызова меню управления."
-            )
-        except:
-            pass
+        # Уведомление о запуске (будет отправлено после инициализации Telegram)
+        telegram_started = False
         
         # Запуск задач с логированием
         async def task_with_log(name, coro):
