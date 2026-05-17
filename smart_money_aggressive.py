@@ -2139,7 +2139,62 @@ class SmartMoneyBot:
     async def cmd_daily_report(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /daily_report"""
         await self.send_daily_report()
-    
+
+    async def cmd_stop_trading(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда /stop_trading — остановить торговлю и закрыть позиции с минимальными потерями"""
+        if not self.is_running:
+            await update.message.reply_text("🔴 Бот уже остановлен!")
+            return
+
+        self.is_running = False
+        await update.message.reply_text(
+            "🟡 РЕЖИМ ЗАВЕРШЕНИЯ ТОРГОВЛИ\n"
+            "Новые сделки не открываются.\n"
+            "Закрываю убыточные позиции...\n"
+            "Прибыльные оставляю с трейлингом."
+        )
+
+        # Закрываем только убыточные позиции
+        closed_count = 0
+        kept_count = 0
+        for pid, pos in list(self.positions.items()):
+            try:
+                ticker = await self.exchange.fetch_ticker(pos.symbol)
+                current_price = ticker['last']
+                if pos.side == 'SHORT':
+                    price_change_pct = ((pos.entry_price - current_price) / pos.entry_price) * 100
+                else:
+                    price_change_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100
+                pnl_usd = pos.realized_pnl_usd + (current_price - pos.entry_price) * pos.remaining_quantity
+                if pos.side == 'SHORT':
+                    pnl_usd = pos.realized_pnl_usd + (pos.entry_price - current_price) * pos.remaining_quantity
+
+                # Закрываем если в убытке или на безубытке
+                if pnl_usd < 0:
+                    await self.close_position(pid)
+                    closed_count += 1
+                    logger.info(f"Закрыта убыточная позиция {pos.symbol}: PnL=${pnl_usd:.2f}")
+                else:
+                    # Прибыльную оставляем, но двигаем SL в безубыток
+                    if pos.side == 'SHORT':
+                        new_sl = pos.entry_price * 1.005  # SL чуть выше входа
+                    else:
+                        new_sl = pos.entry_price * 0.995  # SL чуть ниже входа
+                    pos.dynamic_sl_level = 1
+                    kept_count += 1
+                    logger.info(f"Прибыльная позиция {pos.symbol} оставлена с PnL=${pnl_usd:.2f}")
+            except Exception as e:
+                logger.error(f"Ошибка обработки позиции {pos.symbol}: {e}")
+
+        msg = (
+            f"✅ РЕЖИМ ЗАВЕРШЕНИЯ АКТИВИРОВАН\n"
+            f"Закрыто убыточных: {closed_count}\n"
+            f"Оставлено прибыльных: {kept_count}\n"
+            f"Оставшиеся позиции будут закрыты мониторингом."
+        )
+        await update.message.reply_text(msg)
+        await self.send_telegram_message(msg)
+
     async def cmd_start_bot(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /start_bot — включить бота"""
         if self.is_running:
@@ -2206,6 +2261,7 @@ class SmartMoneyBot:
                 app.add_handler(CommandHandler("stop_bot", self.cmd_stop_bot))
                 app.add_handler(CommandHandler("emergency", self.cmd_emergency))
                 app.add_handler(CommandHandler("daily_report", self.cmd_daily_report))
+                app.add_handler(CommandHandler("stop_trading", self.cmd_stop_trading))
                 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
 
                 # Меню команд
@@ -2222,6 +2278,7 @@ class SmartMoneyBot:
                         BotCommand("stop_bot", "Выключить бота"),
                         BotCommand("emergency", "Экстренная остановка"),
                         BotCommand("daily_report", "Статистика"),
+                        BotCommand("stop_trading", "Остановить торговлю с закрытием"),
                     ])
                 except Exception as e:
                     logger.warning(f"Не удалось установить меню: {e}")
