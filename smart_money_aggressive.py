@@ -2219,22 +2219,34 @@ class SmartMoneyBot:
                         drop_pending_updates=True,
                         read_timeout=30,
                         connect_timeout=30,
+                        pool_timeout=30,
                     )
                     logger.info("Telegram бот успешно запущен и опрашивает обновления")
 
-                    # Держим цикл живым, пока работает polling
-                    while self.is_running and self.app.updater.running:
-                        await asyncio.sleep(5)
-
-                    # Если вышли из цикла — polling остановился
-                    if self.is_running:
-                        logger.warning("Telegram polling остановлен. Перезапуск через 10 сек...")
-                        await asyncio.sleep(10)
+                    # Держим цикл живым с проверкой соединения
+                    while self.is_running:
+                        await asyncio.sleep(30)
+                        # Проверяем что polling ещё работает
+                        if not self.app.updater.running:
+                            logger.warning("Telegram polling остановлен")
+                            break
+                        # Пингуем API чтобы убедиться что соединение живо
+                        try:
+                            await asyncio.wait_for(
+                                self.app.bot.get_me(),
+                                timeout=15
+                            )
+                        except Exception:
+                            logger.warning("Telegram API не отвечает, перезапуск polling...")
+                            break
 
                 except Exception as e:
                     logger.error(f"Ошибка Telegram polling: {e}. Перезапуск через 15 сек...")
+
+                # Останавливаем polling перед перезапуском
+                if self.is_running:
                     try:
-                        await self.app.updater.stop()
+                        await asyncio.wait_for(self.app.updater.stop(), timeout=10)
                     except Exception:
                         pass
                     await asyncio.sleep(15)
@@ -2269,13 +2281,21 @@ class SmartMoneyBot:
         except:
             pass
         
-        # Запуск задач
+        # Запуск задач с логированием
+        async def task_with_log(name, coro):
+            try:
+                await coro
+            except Exception as e:
+                logger.error(f"Task '{name}' finished with error: {e}")
+            finally:
+                logger.warning(f"Task '{name}' finished!")
+
         tasks = [
-            asyncio.create_task(self.run_scanner_loop()),
-            asyncio.create_task(self.run_monitoring_loop()),
-            asyncio.create_task(self.run_daily_report_loop()),
-            asyncio.create_task(self.run_hourly_report_loop()),
-            asyncio.create_task(self.run_telegram_bot())
+            asyncio.create_task(task_with_log("scanner", self.run_scanner_loop())),
+            asyncio.create_task(task_with_log("monitoring", self.run_monitoring_loop())),
+            asyncio.create_task(task_with_log("daily_report", self.run_daily_report_loop())),
+            asyncio.create_task(task_with_log("hourly_report", self.run_hourly_report_loop())),
+            asyncio.create_task(task_with_log("telegram", self.run_telegram_bot()))
         ]
         
         # Ждём завершения всех задач (gather завершится только если все упадут)
