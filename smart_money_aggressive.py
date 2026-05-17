@@ -2289,6 +2289,83 @@ class SmartMoneyBot:
         """Команда /daily_report"""
         await self.send_daily_report()
 
+    async def cmd_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Команда /stats — полная статистика: баланс, PnL, winrate, открытые позиции"""
+        try:
+            # 1. Баланс с Binance
+            balance = await self.exchange.fetch_balance()
+            usdt_total = float(balance.get('USDT', {}).get('total', 0))
+            usdt_free = float(balance.get('USDT', {}).get('free', 0))
+            usdt_used = float(balance.get('USDT', {}).get('used', 0))
+            total_pnl = usdt_total - config.DEPOSIT
+            pnl_pct = (total_pnl / config.DEPOSIT * 100) if config.DEPOSIT > 0 else 0
+
+            # 2. Статистика из БД
+            stats = self.db.get_daily_statistics()
+            all_stats = self.db.get_all_statistics()
+
+            today_trades = stats.get('total_trades', 0) if stats else 0
+            today_wins = stats.get('profitable_trades', 0) if stats else 0
+            today_losses = stats.get('losing_trades', 0) if stats else 0
+            today_pnl = stats.get('total_pnl', 0) if stats else 0
+
+            total_trades = all_stats.get('total_trades', 0) or 0
+            total_wins = all_stats.get('profitable', 0) or 0
+            total_losses = all_stats.get('losing', 0) or 0
+            winrate = (total_wins / total_trades * 100) if total_trades > 0 else 0
+
+            # 3. Открытые позиции с текущим PnL
+            positions_text = ""
+            unrealized_pnl = 0.0
+            if self.positions:
+                for pid, pos in self.positions.items():
+                    try:
+                        ticker = await self.exchange.fetch_ticker(pos.symbol)
+                        current_price = ticker['last']
+                        if pos.side == 'SHORT':
+                            price_change = ((pos.entry_price - current_price) / pos.entry_price) * 100
+                        else:
+                            price_change = ((current_price - pos.entry_price) / pos.entry_price) * 100
+                        roe = price_change * pos.leverage
+                        pos_pnl = pos.realized_pnl_usd + (current_price - pos.entry_price) * pos.remaining_quantity
+                        if pos.side == 'SHORT':
+                            pos_pnl = pos.realized_pnl_usd + (pos.entry_price - current_price) * pos.remaining_quantity
+                        unrealized_pnl += pos_pnl
+                        emoji = "🟢" if roe >= 0 else "🔴"
+                        positions_text += (
+                            f"{emoji} {pos.symbol.replace('/USDT', '')} {pos.side}\n"
+                            f"   Вход: ${pos.entry_price:.4f} | Текущая: ${current_price:.4f}\n"
+                            f"   ROE: {roe:+.1f}% | PnL: {'+' if pos_pnl >= 0 else ''}${pos_pnl:.2f}\n\n"
+                        )
+                    except Exception:
+                        positions_text += f"⚠️ {pos.symbol} — ошибка получения цены\n\n"
+            else:
+                positions_text = "Нет открытых позиций\n"
+
+            # 4. Формируем сообщение
+            msg = (
+                f"📊 СТАТИСТИКА\n"
+                f"━━━━━━━━━━━━━━━\n\n"
+                f"💰 БАЛАНС\n"
+                f"Всего: ${usdt_total:.2f}\n"
+                f"Свободно: ${usdt_free:.2f}\n"
+                f"В позициях: ${usdt_used:.2f}\n\n"
+                f"📈 PnL\n"
+                f"Общий: {'+' if total_pnl >= 0 else ''}${total_pnl:.2f} ({pnl_pct:+.1f}%)\n"
+                f"Сегодня: {'+' if today_pnl >= 0 else ''}${today_pnl:.2f}\n"
+                f"Нереализованный: {'+' if unrealized_pnl >= 0 else ''}${unrealized_pnl:.2f}\n\n"
+                f"🎯 СДЕЛКИ\n"
+                f"Всего: {total_trades} (W:{total_wins} L:{total_losses})\n"
+                f"Winrate: {winrate:.1f}%\n"
+                f"Сегодня: {today_trades} (W:{today_wins} L:{today_losses})\n\n"
+                f"📋 ОТКРЫТЫЕ ПОЗИЦИИ\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"{positions_text}"
+            )
+            await update.message.reply_text(msg)
+        except Exception as e:
+            await update.message.reply_text(f"Ошибка получения статистики: {e}")
+
     async def cmd_stop_trading(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /stop_trading — остановить торговлю и закрыть позиции с минимальными потерями"""
         if not self.is_running:
@@ -2386,6 +2463,7 @@ class SmartMoneyBot:
         self.app.add_handler(CommandHandler("stop_bot", self.cmd_stop_bot))
         self.app.add_handler(CommandHandler("emergency", self.cmd_emergency))
         self.app.add_handler(CommandHandler("daily_report", self.cmd_daily_report))
+        self.app.add_handler(CommandHandler("stats", self.cmd_stats))
         
         # Обработчик текстовых кнопок
         self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
@@ -2411,6 +2489,7 @@ class SmartMoneyBot:
                 app.add_handler(CommandHandler("emergency", self.cmd_emergency))
                 app.add_handler(CommandHandler("daily_report", self.cmd_daily_report))
                 app.add_handler(CommandHandler("stop_trading", self.cmd_stop_trading))
+                app.add_handler(CommandHandler("stats", self.cmd_stats))
                 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
 
                 # Меню команд
@@ -2426,7 +2505,8 @@ class SmartMoneyBot:
                         BotCommand("start_bot", "Включить бота"),
                         BotCommand("stop_bot", "Выключить бота"),
                         BotCommand("emergency", "Экстренная остановка"),
-                        BotCommand("daily_report", "Статистика"),
+                        BotCommand("daily_report", "Статистика за день"),
+                        BotCommand("stats", "Полная статистика"),
                         BotCommand("stop_trading", "Остановить торговлю с закрытием"),
                     ])
                 except Exception as e:
