@@ -2660,7 +2660,7 @@ class SmartMoneyBot:
                 )
             except Exception as e:
                 logger.error(f"Error sending error message to user: {e}")
-                
+
     async def start(self) -> bool:
                     await asyncio.sleep(15)
                     continue
@@ -2693,6 +2693,12 @@ class SmartMoneyBot:
             if self.is_running:
                 logger.info("Перезапуск Telegram бота через 15 сек...")
                 await asyncio.sleep(15)
+
+    async def send_error_message(self, user_id: int, message: str) -> None:
+        try:
+            await self.bot.send_message(user_id, message)
+        except Exception as e:
+            logger.error(f"Error sending error message to user: {e}")
 
     async def start(self) -> bool:
         """Запуск бота. Возвращает False, если биржа недоступна (процесс можно завершить с кодом ≠ 0)."""
