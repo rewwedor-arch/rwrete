@@ -1099,17 +1099,19 @@ class SmartMoneyBot:
             return 0, 0, 0
     
     async def send_telegram_message(self, message: str, parse_mode: str = None):
-        """Отправка сообщения в все активные чаты (и в основной канал, и напрямую в бота)"""
-        bot = Bot(token=self.telegram_token)
+        """Отправка сообщения в все активные чаты"""
+        if not hasattr(self, 'app') or self.app is None:
+            logger.error("Telegram app не инициализирован")
+            return
         for chat_id in self.active_chat_ids:
             try:
-                await bot.send_message(
+                await self.app.bot.send_message(
                     chat_id=chat_id,
                     text=message,
                     parse_mode=parse_mode
                 )
             except Exception as e:
-                pass
+                logger.error(f"Ошибка отправки в {chat_id}: {e}")
         logger.info(f"Telegram сообщение отправлено: {message[:50]}...")
     
     def calculate_stop_loss(self, entry_price: float, side: str = 'LONG') -> float:
