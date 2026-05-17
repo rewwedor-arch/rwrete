@@ -67,6 +67,7 @@ class StrategyConfig:
     # Риск-менеджмент — ШИРОКИЙ КОРИДОР для высоковолатильных альтов
     STOP_LOSS_PCT: float = 3.5  # SL -3.5% от цены (чтобы не выбивало шумом)
     TAKE_PROFIT_PCT: float = 3.0  # TP1 +3.0% (быстрый фикс)
+    TAKE_PROFIT: float = TAKE_PROFIT_PCT  # Backward compatibility for code that uses TAKE_PROFIT
     TP2_PCT: float = 6.0  # TP2 +6.0% (основной профит)
     TP3_PCT: float = 12.0  # TP3 +12.0% (луншот)
 
@@ -287,15 +288,6 @@ class Database:
     
     def __init__(self, db_path: str = 'smart_money.db'):
         self.db_path = db_path
-        
-        # Очистка базы данных при каждом запуске по просьбе пользователя
-        if os.path.exists(self.db_path):
-            try:
-                os.remove(self.db_path)
-                logger.info("Старая база данных удалена. Начинаем с чистого листа.")
-            except Exception as e:
-                logger.warning(f"Не удалось удалить старую БД: {e}")
-                
         self.init_db()
     
     def init_db(self):
@@ -2303,21 +2295,22 @@ class SmartMoneyBot:
             total_pnl = usdt_total - config.DEPOSIT
             pnl_pct = (total_pnl / config.DEPOSIT * 100) if config.DEPOSIT > 0 else 0
 
-            # 2. Статистика из БД
-            stats = self.db.get_daily_statistics()
+            # 2. Статистика из БД (общая по всем дням)
             all_stats = self.db.get_all_statistics()
-
-            today_trades = stats.get('total_trades', 0) if stats else 0
-            today_wins = stats.get('profitable_trades', 0) if stats else 0
-            today_losses = stats.get('losing_trades', 0) if stats else 0
-            today_pnl = stats.get('total_pnl', 0) if stats else 0
-
             total_trades = all_stats.get('total_trades', 0) or 0
             total_wins = all_stats.get('profitable', 0) or 0
             total_losses = all_stats.get('losing', 0) or 0
             winrate = (total_wins / total_trades * 100) if total_trades > 0 else 0
 
-            # 3. Открытые позиции с текущим PnL
+            # 3. Статистика за сегодня
+            stats = self.db.get_daily_statistics()
+            today_trades = stats.get('total_trades', 0) if stats else 0
+            today_wins = stats.get('profitable_trades', 0) if stats else 0
+            today_losses = stats.get('losing_trades', 0) if stats else 0
+            today_pnl = stats.get('total_pnl', 0) if stats else 0
+            today_winrate = (today_wins / today_trades * 100) if today_trades > 0 else 0
+
+            # 4. Открытые позиции с текущим PnL
             positions_text = ""
             unrealized_pnl = 0.0
             if self.positions:
@@ -2345,7 +2338,7 @@ class SmartMoneyBot:
             else:
                 positions_text = "Нет открытых позиций\n"
 
-            # 4. Формируем сообщение
+            # 5. Формируем сообщение
             msg = (
                 f"📊 СТАТИСТИКА\n"
                 f"━━━━━━━━━━━━━━━\n\n"
@@ -2357,10 +2350,12 @@ class SmartMoneyBot:
                 f"Общий: {'+' if total_pnl >= 0 else ''}${total_pnl:.2f} ({pnl_pct:+.1f}%)\n"
                 f"Сегодня: {'+' if today_pnl >= 0 else ''}${today_pnl:.2f}\n"
                 f"Нереализованный: {'+' if unrealized_pnl >= 0 else ''}${unrealized_pnl:.2f}\n\n"
-                f"🎯 СДЕЛКИ\n"
+                f"🎯 СДЕЛКИ ЗА ВСЁ ВРЕМЯ\n"
                 f"Всего: {total_trades} (W:{total_wins} L:{total_losses})\n"
-                f"Winrate: {winrate:.1f}%\n"
-                f"Сегодня: {today_trades} (W:{today_wins} L:{today_losses})\n\n"
+                f"Winrate: {winrate:.1f}%\n\n"
+                f"📅 СЕГОДНЯ\n"
+                f"Сделок: {today_trades} (W:{today_wins} L:{today_losses})\n"
+                f"Winrate: {today_winrate:.1f}%\n\n"
                 f"📋 ОТКРЫТЫЕ ПОЗИЦИИ\n"
                 f"━━━━━━━━━━━━━━━\n"
                 f"{positions_text}"
