@@ -2475,7 +2475,14 @@ class SmartMoneyBot:
         while self.is_running:
             try:
                 logger.info("Инициализация Telegram бота...")
-                app = Application.builder().token(self.telegram_token).build()
+                app = (
+                    Application.builder()
+                    .token(self.telegram_token)
+                    .connect_timeout(30)
+                    .read_timeout(30)
+                    .pool_timeout(30)
+                    .build()
+                )
 
                 # Регистрация обработчиков
                 app.add_handler(CommandHandler("start", self.cmd_start))
@@ -2515,16 +2522,12 @@ class SmartMoneyBot:
                 self.app = app
                 logger.info("Telegram бот запускается...")
 
-                # Запускаем polling с таймаутами
+                # Запускаем polling
                 await app.initialize()
                 await app.start()
                 await app.updater.start_polling(
                     allowed_updates=Update.ALL_TYPES,
                     drop_pending_updates=True,
-                    read_timeout=20,
-                    connect_timeout=20,
-                    pool_timeout=20,
-                    request_timeout=20,
                 )
                 logger.info("Telegram polling запущен")
 
@@ -2538,12 +2541,9 @@ class SmartMoneyBot:
                     except Exception:
                         pass
 
-                # Ждём пока бот работает, проверяем каждые 30 сек
-                while self.is_running:
-                    await asyncio.sleep(30)
-                    if not app.updater.running:
-                        logger.warning("Polling остановлен, перезапуск...")
-                        break
+                # Ждём пока бот работает
+                while self.is_running and app.updater.running:
+                    await asyncio.sleep(10)
 
             except Exception as e:
                 logger.error(f"Ошибка Telegram бота: {e}")
