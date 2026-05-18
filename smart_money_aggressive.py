@@ -2693,38 +2693,7 @@ class SmartMoneyBot:
             except Exception as e:
                 logger.error(f"Error sending error message to user: {e}")
 
-    async def start(self) -> bool:
-                    await asyncio.sleep(15)
-                    continue
-                else:
-                    logger.info("Polling успешно запущен и работает")
 
-                # Уведомление о запуске
-                for chat_id in self.active_chat_ids:
-                    try:
-                        await app.bot.send_message(
-                            chat_id=chat_id,
-                            text="🟢 БОТ ЗАПУЩЕН\nИспользуйте /start для меню"
-                        )
-                    except Exception as e:
-                        logger.error(f"Ошибка отправки сообщения в чат {chat_id}: {e}")
-                        pass
-
-                logger.info("Telegram polling запущен")
-
-                # Ждём пока бот работает
-                while self.is_running:
-                    await asyncio.sleep(10)
-                    if polling_done.is_set():
-                        logger.warning("Polling остановился, перезапуск...")
-                        break
-
-            except Exception as e:
-                logger.error(f"Ошибка Telegram бота: {e}")
-
-            if self.is_running:
-                logger.info("Перезапуск Telegram бота через 15 сек...")
-                await asyncio.sleep(15)
 
     async def send_error_message(self, user_id: int, message: str) -> None:
         try:
