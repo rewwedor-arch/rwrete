@@ -65,7 +65,7 @@ class StrategyConfig:
     LEVERAGE: int = 75  # Максимальное плечо (x75)
 
     # Риск-менеджмент — ШИРОКИЙ КОРИДОР для высоковолатильных альтов
-    STOP_LOSS_PCT: float = 3.5  # SL -3.5% от цены (чтобы не выбивало шумом)
+    STOP_LOSS_PCT: float = 0.8  # SL -3.5% от цены (чтобы не выбивало шумом)
     TAKE_PROFIT_PCT: float = 3.0  # TP1 +3.0% (быстрый фикс)
     TAKE_PROFIT: float = TAKE_PROFIT_PCT  # Backward compatibility for code that uses TAKE_PROFIT
     TP2_PCT: float = 6.0  # TP2 +6.0% (основной профит)
@@ -124,9 +124,9 @@ class StrategyConfig:
     PEAK_DRAWDOWN_CLOSE_PCT: float = 8.0    # Закрыть при откате 8% ROE от пика (было 15)
     TRAILING_ACTIVATE_PCT: float = 35.0     # Трейлинг после +35% ROE (было 45)
     TRAILING_DRAWDOWN_CLOSE_PCT: float = 5.0 # Жёсткий трейлинг: закрыть при откате 5% (было 10)
-    PARTIAL_TP1_PCT: float = 22.0   # Фиксируем 30% при +22% ROE
-    PARTIAL_TP2_PCT: float = 40.0   # Фиксируем ещё 30% при +40% ROE
-    PARTIAL_TP3_PCT: float = 60.0   # Полная фиксация при +60% ROE
+    PARTIAL_TP1_PCT: float = 15.0   # Фиксируем 30% при +22% ROE
+    PARTIAL_TP2_PCT: float = 30.0   # Фиксируем ещё 30% при +40% ROE
+    PARTIAL_TP3_PCT: float = 50.0   # Полная фиксация при +60% ROE
 
     # Время позиции
     POSITION_TIMEOUT_HOURS: int = 36
@@ -990,37 +990,56 @@ class SMCAnalyzer:
                 short_ind['macd'] = True
             
             # ═══ 7. Всплеск объема (нейтральный) ═══
+                                    # ═══ 7. Всплеск объема (нейтральный) ═══
             vol_sma = self.calculate_sma(volumes_5m, 20)
             if vol_sma and vol_sma[-1] > 0:
                 vol_ratio = volumes_5m[-1] / vol_sma[-1]
-                if vol_ratio > 1.3:  # Смягчено с 1.5 до 1.3
+                if vol_ratio > 1.3:
                     long_score += 1
                     short_score += 1
                     result['volume_ok'] = True
                     long_ind['volume_spike'] = True
                     short_ind['volume_spike'] = True
-            
-            # ═══ Выбираем лучшее направление ═══
-            if long_score >= short_score and long_score >= config.MIN_INDICATORS_SCORE:
-                result['score'] = long_score
-                result['direction'] = 'LONG'
-                result['indicators'] = long_ind
+
+            # Определяем базовое направление по EMA50
+            potential_dir = 'LONG' if (ema50 and current_price > ema50[-1]) else 'SHORT'
+            if not ema50:
+                result['signal'] = False
+                result['score'] = "NO_EMA"
+                return result
+
+            # 🔹 ПАТТЕРН 1: По тренду с имбалансом
+            p1_trend = (potential_dir == 'LONG' and current_price > ema50[-1]) or \
+                       (potential_dir == 'SHORT' and current_price < ema50[-1])
+            p1_fvg = (fvg == 'BULLISH' and potential_dir == 'LONG') or \
+                     (fvg == 'BEARISH' and potential_dir == 'SHORT')
+            p1_adx = adx and adx[-1] > 20
+
+            # 🔹 ПАТТЕРН 2: Смена структуры + Объем
+            p2_bos = (bos in ['BOS_UP', 'CHoCH_BULLISH'] and potential_dir == 'LONG') or \
+                     (bos in ['BOS_DOWN', 'CHoCH_BEARISH'] and potential_dir == 'SHORT')
+            p2_macd = (macd['histogram'] > 0 and macd['macd'] > macd['signal'] and potential_dir == 'LONG') or \
+                      (macd['histogram'] < 0 and macd['macd'] < macd['signal'] and potential_dir == 'SHORT')
+            p2_vol = vol_sma and vol_ratio > 1.3
+
+            # Проверка срабатывания
+            if p1_trend and p1_fvg and p1_adx:
                 result['signal'] = True
-            elif short_score > long_score and short_score >= config.MIN_INDICATORS_SCORE:
-                result['score'] = short_score
-                result['direction'] = 'SHORT'
-                result['indicators'] = short_ind
+                result['direction'] = potential_dir
+                result['score'] = "PATTERN_1_TREND_FVG"
+                result['indicators'] = {'ema_trend': True, 'fvg': bool(fvg), 'adx': True}
+            elif p2_bos and p2_macd and p2_vol:
                 result['signal'] = True
+                result['direction'] = potential_dir
+                result['score'] = "PATTERN_2_BOS_VOL"
+                result['indicators'] = {'bos': True, 'macd': True, 'volume': True}
             else:
-                # Нет сигнала, но показываем лучший score
-                if long_score >= short_score:
-                    result['score'] = long_score
-                    result['direction'] = 'LONG'
-                    result['indicators'] = long_ind
-                else:
-                    result['score'] = short_score
-                    result['direction'] = 'SHORT'
-                    result['indicators'] = short_ind
+                result['signal'] = False
+                result['direction'] = potential_dir
+                result['score'] = "NO_MATCH"
+                result['indicators'] = {}
+
+
             
         except Exception as e:
             logger.error(f"Ошибка анализа {symbol}: {e}")
@@ -1081,6 +1100,8 @@ class SmartMoneyBot:
                 'adjustForTimeDifference': True
             }
         }
+
+
         
         if testnet:
             logger.info("🔧 Используется Binance Demo Trading (demo-fapi.binance.com)")
@@ -1111,14 +1132,9 @@ class SmartMoneyBot:
         self.positions: Dict[int, Position] = {}
         
         # Список символов для сканирования
-        self.symbols_to_scan = [
-            'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT',
-            'XRP/USDT', 'ADA/USDT', 'AVAX/USDT', 'DOGE/USDT',
-            'DOT/USDT', 'LINK/USDT',             'POL/USDT', 'UNI/USDT',
-            'ATOM/USDT', 'LTC/USDT', 'ETC/USDT', 'NEAR/USDT',
-            'FIL/USDT', 'AAVE/USDT', 'ARB/USDT', 'OP/USDT',
-            'VANA/USDT'
-        ]
+        self.symbols_to_scan: List[str] = []
+
+
         
         # Статус бота
         self.is_running = False
@@ -1134,7 +1150,26 @@ class SmartMoneyBot:
         
         # Отдельный Bot для отправки сообщений (работает независимо от polling)
         self._bot = Bot(token=self.telegram_token)
-    
+        async def update_top_symbols(self):
+        """Загружает Топ-80 USDT-фьючерсов по объему за 24ч"""
+        try:
+            markets = await self.exchange.load_markets()
+            tickers = await self.exchange.fetch_tickers()
+            usdt_perps = []
+            for symbol, market in markets.items():
+                if symbol.endswith('/USDT') and market.get('type') == 'swap':
+                    vol = tickers[symbol].get('quoteVolume', 0.0) if symbol in tickers else 0.0
+                    usdt_perps.append((symbol, vol))
+            usdt_perps.sort(key=lambda x: x[1], reverse=True)
+            self.symbols_to_scan = [pair[0] for pair in usdt_perps[:80]]
+            logger.info(f"🔄 Топ-80 пар обновлен. Доступно фьючерсов: {len(markets)}")
+        except Exception as e:
+            logger.error(f"Ошибка обновления топа пар: {e}")
+            if not self.symbols_to_scan:
+                self.symbols_to_scan = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT']
+
+
+
     async def connect(self):
         """Подключение к бирже"""
         try:
@@ -1294,9 +1329,10 @@ class SmartMoneyBot:
             min_notional = float(market_info.get('limits', {}).get('cost', {}).get('min', 5))
             
             # Расчет параметров (score определяет вес позиции)
-            quantity, margin, actual_amount = await self.calculate_position_size(
-                entry_price, score=smc_result['score']
-            )
+            quantity, margin, actual_amount = await self.calculate_position_size(entry_price, score=5)
+
+
+         
             if quantity == 0:
                 logger.warning(f"Недостаточно средств для открытия позиции {symbol}")
                 return None
@@ -1836,41 +1872,39 @@ class SmartMoneyBot:
                         continue
 
                 # 7. ЧАСТИЧНАЯ ФИКСАЦИЯ (пороги выше — реже режем прибыль в начале движения)
-                if pnl_pct >= config.PARTIAL_TP1_PCT and not position.partial_tp1_done:
-                    position.partial_tp1_done = True
-                    qty_to_close = position.quantity * 0.30
-                    await self.close_partial_position(position, qty_to_close, current_price)
-                    await self.send_telegram_message(
-                        f"💰 ЧАСТИЧНАЯ ФИКСАЦИЯ | {pair}\n"
-                        f"TP1 +{config.PARTIAL_TP1_PCT:.0f}% достигнут\n"
-                        f"Закрыто: 30% позиции\n"
-                        f"Вложено было: ${position.amount_usdt:.2f}\n"
-                        f"Текущий общий PnL: {'+' if pnl_usd >= 0 else ''}${pnl_usd:.2f}\n"
-                        f"Остаток: {position.remaining_quantity:.4f} (с трейлингом)"
-                    )
-                
-                if pnl_pct >= config.PARTIAL_TP2_PCT and not position.partial_tp2_done:
-                    position.partial_tp2_done = True
-                    qty_to_close = position.quantity * 0.30
-                    await self.close_partial_position(position, qty_to_close, current_price)
-                    await self.send_telegram_message(
-                        f"🚀 TP2 ДОСТИГНУТ | {pair}\n"
-                        f"Уровень +{config.PARTIAL_TP2_PCT:.0f}% пройден\n"
-                        f"Закрыто еще 30% (всего 60%)\n"
-                        f"Вложено было: ${position.amount_usdt:.2f}\n"
-                        f"Текущий общий PnL: {'+' if pnl_usd >= 0 else ''}${pnl_usd:.2f}"
-                    )
+if pnl_pct >= config.PARTIAL_TP1_PCT and not position.partial_tp1_done:
+    position.partial_tp1_done = True
+    qty_to_close = position.quantity * 0.40  # ЗАКРЫВАЕМ 40%
+    await self.close_partial_position(position, qty_to_close, current_price)
+    # СРАЗУ переводим SL в безубыток
+    position.dynamic_sl_level = 1
+    await self.apply_dynamic_sl(position, price_change_pct, current_price)
+    await self.send_telegram_message(
+        f"💰 ЧАСТИЧНАЯ ФИКСАЦИЯ | {pair}\n"
+        f"TP1 +{config.PARTIAL_TP1_PCT:.0f}% ROE достигнут\n"
+        f"Закрыто: 40% позиции | SL в безубыток"
+    )
 
-                if pnl_pct >= config.PARTIAL_TP3_PCT and not position.partial_tp3_done:
-                    position.partial_tp3_done = True
-                    await self.send_telegram_message(
-                        f"💎 TP3 +{config.PARTIAL_TP3_PCT:.0f}% | {pair}\n"
-                        f"Полная фиксация прибыли!\n"
-                        f"💰 Вложено: ${position.amount_usdt:.2f}\n"
-                        f"Текущий PnL: {pnl_pct:+.1f}% ({'+' if pnl_usd >= 0 else ''}${pnl_usd:.2f})"
-                    )
-                    await self.close_position(position_id)
-                    continue
+if pnl_pct >= config.PARTIAL_TP2_PCT and not position.partial_tp2_done:
+    position.partial_tp2_done = True
+    qty_to_close = position.quantity * 0.30  # ЗАКРЫВАЕМ ЕЩЕ 30%
+    await self.close_partial_position(position, qty_to_close, current_price)
+    await self.send_telegram_message(
+        f"🚀 TP2 ДОСТИГНУТ | {pair}\n"
+        f"Уровень +{config.PARTIAL_TP2_PCT:.0f}% ROE пройден\n"
+        f"Закрыто еще 30% (всего 70%)"
+    )
+
+if pnl_pct >= config.PARTIAL_TP3_PCT and not position.partial_tp3_done:
+    position.partial_tp3_done = True
+    await self.send_telegram_message(
+        f"💎 TP3 +{config.PARTIAL_TP3_PCT:.0f}% ROE | {pair}\n"
+        f"Полная фиксация остатка!"
+    )
+    await self.close_position(position_id)
+    continue
+
+
 
                 # 7. ДИНАМИЧЕСКИЙ SL (передаём price_change_pct — без плеча!)
                 await self.apply_dynamic_sl(position, price_change_pct, current_price)
@@ -1921,9 +1955,14 @@ class SmartMoneyBot:
         logger.info(f"Начало сканирования рынка... ({len(self.symbols_to_scan)} символов)")
         
         for symbol in self.symbols_to_scan:
-            # Проверка лимита
+            await asyncio.sleep(1)  # Защита от лимитов Binance
             if self.signals_today >= self.max_signals_per_day:
                 break
+            
+            # Пропуск если уже есть позиция по этому символу
+
+
+
             
             # Пропуск если уже есть позиция по этому символу
             if any(p.symbol == symbol for p in self.positions.values()):
@@ -1933,7 +1972,9 @@ class SmartMoneyBot:
             smc_result = await self.smc_analyzer.analyze_symbol(symbol)
             
             # Проверяем, чтобы score был >= MIN_INDICATORS_SCORE (от 5/7)
-            if smc_result['signal'] and smc_result['score'] >= config.MIN_INDICATORS_SCORE:
+            if smc_result['signal']:
+
+
                 logger.info(f"СИГНАЛ найден: {symbol} (score: {smc_result['score']}/{config.TOTAL_INDICATORS})")
                 
                 # Получение текущей цены для входа
@@ -1951,14 +1992,20 @@ class SmartMoneyBot:
     
     async def run_scanner_loop(self):
         """Цикл сканирования рынка"""
+        last_update = datetime.now(timezone.utc)
         while self.is_running:
             try:
+                # Обновляем топ каждый час
+                if (datetime.now(timezone.utc) - last_update).total_seconds() > 3600:
+                    await self.update_top_symbols()
+                    last_update = datetime.now(timezone.utc)
                 await self.scan_market()
-                # Сканирование каждые 60 секунд (ультра-агрессивный режим)
                 await asyncio.sleep(60)
             except Exception as e:
                 logger.error(f"Ошибка в цикле сканирования: {e}")
                 await asyncio.sleep(30)
+
+
     
     async def run_monitoring_loop(self):
         """Цикл мониторинга позиций"""
@@ -2719,15 +2766,9 @@ class SmartMoneyBot:
         # Уведомление о запуске (будет отправлено после инициализации Telegram)
         telegram_started = False
         
-        # Запуск задач с логированием
-        async def task_with_log(name, coro):
-            try:
-                await coro
-            except Exception as e:
-                logger.error(f"Task '{name}' finished with error: {e}")
-            finally:
-                logger.warning(f"Task '{name}' finished!")
-
+        #         # Запуск задач с логированием
+        await self.update_top_symbols()
+        
         tasks = [
             asyncio.create_task(task_with_log("scanner", self.run_scanner_loop())),
             asyncio.create_task(task_with_log("monitoring", self.run_monitoring_loop())),
@@ -2737,6 +2778,9 @@ class SmartMoneyBot:
             asyncio.create_task(task_with_log("fear_greed", check_fear_greed_index(self))),
             asyncio.create_task(task_with_log("trailing_stop", trailing_stop_loop(self)))
         ]
+
+
+       
         
         # Ждём завершения всех задач (gather завершится только если все упадут)
         results = await asyncio.gather(*tasks, return_exceptions=True)
