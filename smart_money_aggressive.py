@@ -259,20 +259,34 @@ async def trailing_stop_loop(bot: 'SmartMoneyBot'):
 
                             # Отправляем новый SL на биржу
                             try:
+                                qty_rounded = float(bot.exchange.amount_to_precision(pos.symbol, pos.remaining_quantity))
+                                if qty_rounded <= 0:
+                                    continue
                                 # Удаляем старый SL и ставим новый
                                 await bot.exchange.cancel_all_orders(pos.symbol)
+                                
                                 if pos.side == 'SHORT':
+                                    actual_tp = float(bot.exchange.price_to_precision(pos.symbol, pos.entry_price * (1 - config.TP3_PCT / 100)))
                                     await bot.exchange.create_order(
-                                        pos.symbol, 'stop_market', 'buy', pos.remaining_quantity,
+                                        pos.symbol, 'STOP_MARKET', 'BUY', qty_rounded,
                                         params={'stopPrice': new_sl_price, 'reduceOnly': True}
+                                    )
+                                    await bot.exchange.create_order(
+                                        pos.symbol, 'TAKE_PROFIT_MARKET', 'BUY', qty_rounded,
+                                        params={'stopPrice': actual_tp, 'reduceOnly': True}
                                     )
                                 else:
+                                    actual_tp = float(bot.exchange.price_to_precision(pos.symbol, pos.entry_price * (1 + config.TP3_PCT / 100)))
                                     await bot.exchange.create_order(
-                                        pos.symbol, 'stop_market', 'sell', pos.remaining_quantity,
+                                        pos.symbol, 'STOP_MARKET', 'SELL', qty_rounded,
                                         params={'stopPrice': new_sl_price, 'reduceOnly': True}
                                     )
+                                    await bot.exchange.create_order(
+                                        pos.symbol, 'TAKE_PROFIT_MARKET', 'SELL', qty_rounded,
+                                        params={'stopPrice': actual_tp, 'reduceOnly': True}
+                                    )
                             except Exception as e:
-                                logger.warning(f"Не удалось обновить SL на бирже для {pos.symbol}: {e}")
+                                logger.warning(f"Не удалось обновить SL/TP на бирже для {pos.symbol}: {e}")
 
                 except Exception as e:
                     logger.error(f"Ошибка трейлинга для {pos.symbol}: {e}")
@@ -1474,6 +1488,13 @@ class SmartMoneyBot:
             
             logger.info(f"Пытаюсь закрыть позицию {symbol}, количество: {qty_close}, тип: {position.side}")
             
+            # Очистка оставшихся ордеров (SL/TP) BEFORE MARKET ORDER
+            try:
+                await self.exchange.cancel_all_orders(symbol)
+                logger.info(f"Отменены все ордера для {symbol} перед закрытием")
+            except Exception as cancel_e:
+                logger.warning(f"Не удалось отменить ордера для {symbol} перед закрытием: {cancel_e}")
+            
             # Закрытие: для LONG продаём, для SHORT покупаем
             try:
                 if position.side == 'SHORT':
@@ -1493,20 +1514,10 @@ class SmartMoneyBot:
                     ticker = await self.exchange.fetch_ticker(symbol)
                     current_price = ticker['last']
                     logger.info(f"Текущая цена {symbol}: {current_price}")
-                    
-                    # Пробуем закрыть принудительно, даже если ордер не прошел
-                    await self.exchange.cancel_all_orders(symbol)
-                    logger.info(f"Отменены все ордера для {symbol}")
                 except Exception as cleanup_e:
-                    logger.error(f"Ошибка при очистке ордеров {symbol}: {cleanup_e}")
+                    logger.error(f"Ошибка при получении цены {symbol}: {cleanup_e}")
                 
                 raise order_e
-            
-            # Очистка оставшихся ордеров (SL/TP)
-            try:
-                await self.exchange.cancel_all_orders(symbol)
-            except Exception as cancel_e:
-                logger.warning(f"Не удалось отменить ордера для {symbol}: {cancel_e}")
             
             exit_price = order.get('average')
             if not exit_price:
@@ -1684,10 +1695,20 @@ class SmartMoneyBot:
                 await self.exchange.cancel_all_orders(position.symbol)
                 
                 close_side = 'BUY' if position.side == 'SHORT' else 'SELL'
+                if position.side == 'SHORT':
+                    actual_tp = float(self.exchange.price_to_precision(position.symbol, position.entry_price * (1 - config.TP3_PCT / 100)))
+                else:
+                    actual_tp = float(self.exchange.price_to_precision(position.symbol, position.entry_price * (1 + config.TP3_PCT / 100)))
+
                 await self.exchange.create_order(
                     symbol=position.symbol, type='STOP_MARKET', side=close_side,
                     amount=qty_rounded,
                     params={'stopPrice': new_sl_price, 'reduceOnly': True}
+                )
+                await self.exchange.create_order(
+                    symbol=position.symbol, type='TAKE_PROFIT_MARKET', side=close_side,
+                    amount=qty_rounded,
+                    params={'stopPrice': actual_tp, 'reduceOnly': True}
                 )
                 position.stop_loss = new_sl_price
                 position.dynamic_sl_level = new_level
@@ -2093,9 +2114,15 @@ class SmartMoneyBot:
             logger.error(f"Ошибка отправки часового отчёта: {e}")
     
     async def run_hourly_report_loop(self):
-        """Цикл отправки часовых отчётов отключен (теперь по кнопке) — просто спим бесконечно"""
+        """Цикл отправки часовых отчётов"""
         while self.is_running:
-            await asyncio.sleep(3600)
+            try:
+                await asyncio.sleep(3600)
+                if self.is_running:
+                    await self.send_hourly_report()
+            except Exception as e:
+                logger.error(f"Ошибка в цикле часовых отчетов: {e}")
+                await asyncio.sleep(60)
     
     # ========================================================================
     # TELEGRAM КОМАНДЫ И КНОПКИ
@@ -2644,6 +2671,11 @@ class SmartMoneyBot:
             # Ждем пока бот работает
             while self.is_running:
                 await asyncio.sleep(1)
+                
+            if self.app.updater and self.app.updater.running:
+                await self.app.updater.stop()
+            await self.app.stop()
+            await self.app.shutdown()
 
         except Exception as e:
             logger.error(f"Failed to start Telegram bot: {e}")
@@ -2751,6 +2783,14 @@ class SmartMoneyBot:
         """Остановка бота"""
         logger.info("Остановка бота...")
         self.is_running = False
+        if hasattr(self, 'app') and self.app:
+            try:
+                if self.app.updater and self.app.updater.running:
+                    await self.app.updater.stop()
+                await self.app.stop()
+                await self.app.shutdown()
+            except Exception as e:
+                logger.error(f"Ошибка при остановке Telegram: {e}")
         await self.disconnect()
 
 
