@@ -53,6 +53,28 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
+# HELPER: безопасный запуск async-задач с логированием
+# ============================================================================
+async def task_with_log(task_name: str, coro):
+    """
+    Обёртка для asyncio задач.
+    Логирует старт, ошибки и предотвращает silent crash.
+    """
+    try:
+        logger.info(f"🚀 Запуск задачи: {task_name}")
+        result = await coro
+        logger.info(f"✅ Задача завершена: {task_name}")
+        return result
+    except asyncio.CancelledError:
+        logger.warning(f"⚠️ Задача отменена: {task_name}")
+        raise
+    except Exception as e:
+        logger.exception(f"❌ Ошибка в задаче {task_name}: {e}")
+        return None
+
+
+
+# ============================================================================
 # КРИТИЧЕСКИ ВАЖНЫЕ ПАРАМЕТРЫ СТРАТЕГИИ
 # ============================================================================
 
