@@ -269,7 +269,7 @@ async def check_fear_greed_index(bot: 'SmartMoneyBot'):
                                 )
         except Exception as e:
             logger.error(f"Ошибка Fear & Greed: {e}")
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(14400)
 
 
 async def trailing_stop_loop(bot: 'SmartMoneyBot'):
@@ -358,7 +358,7 @@ async def trailing_stop_loop(bot: 'SmartMoneyBot'):
                     logger.error(f"Ошибка трейлинга {pos.symbol}: {e}")
         except Exception as e:
             logger.error(f"Ошибка в trailing_stop_loop: {e}")
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(10)
 
 
 # ============================================================================
@@ -1329,19 +1329,11 @@ class SmartMoneyBot:
             await self.send_telegram_message(message)
             logger.info(f"Позиция закрыта: UNKNOWN, PnL: ${total_pnl:.2f}")
             return True
-
         except Exception as e:
             logger.error(f"Ошибка закрытия позиции {position_id}: {e}")
-
-        except Exception as close_error:
-            logger.warning(f"ClosePosition failed: {close_error}")
-            try:
-                side = 'sell' if position_side == 'long' else 'buy'
-                await exchange.create_market_order(symbol, side, amount, params={'reduceOnly': True})
-            except Exception as market_close_error:
-                logger.error(f"Market close fallback failed: {market_close_error}")
             await self.send_telegram_message(f"❌ Ошибка закрытия позиции {position_id}: {e}")
             return False
+
 
     async def close_all_positions(self, emergency=False):
         position_ids = list(self.positions.keys())
@@ -1616,7 +1608,7 @@ class SmartMoneyBot:
                     await self.update_top_symbols()
                     last_update = datetime.now(timezone.utc)
                 await self.scan_market()
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(10)
             except Exception as e:
                 logger.error(f"Ошибка в цикле сканирования: {e}")
                 await asyncio.sleep(0.5)
@@ -1625,7 +1617,7 @@ class SmartMoneyBot:
         while self.is_running:
             try:
                 await self.monitor_positions()
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(5)
             except Exception as e:
                 logger.error(f"Ошибка мониторинга: {e}")
                 await asyncio.sleep(0.5)
@@ -1706,7 +1698,7 @@ class SmartMoneyBot:
     async def run_hourly_report_loop(self):
         while self.is_running:
             try:
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(3600)
                 if self.is_running:
                     await self.send_hourly_report()
             except Exception as e:
