@@ -637,7 +637,7 @@ class SMCAnalyzer:
         try:
             return await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         except Exception as e:
-            logger.error(f"Ошибка OHLCV {symbol}: {e}")
+            logger.error(f"Ошибка OHLCV UNKNOWN: {e}")
             return []
 
     def calculate_ema(self, prices, period) -> List[float]:
@@ -877,7 +877,7 @@ class SMCAnalyzer:
                 result['indicators'] = {}
 
         except Exception as e:
-            logger.error(f"Ошибка анализа {symbol}: {e}")
+            logger.error(f"Ошибка анализа UNKNOWN: {e}")
         return result
 
 
@@ -980,14 +980,14 @@ class SmartMoneyBot:
             ranges = [(c[2] - c[3]) / c[3] * 100 for c in ohlcv[-10:]]
             avg_range = sum(ranges) / len(ranges)
             if avg_range < config.MIN_VOLATILITY_PCT:
-                logger.debug(f"{symbol}: слишком низкая волатильность {avg_range:.2f}%")
+                logger.debug(f"UNKNOWN: слишком низкая волатильность {avg_range:.2f}%")
                 return False
             if avg_range > config.MAX_VOLATILITY_PCT:
-                logger.debug(f"{symbol}: слишком высокая волатильность {avg_range:.2f}% (паника)")
+                logger.debug(f"UNKNOWN: слишком высокая волатильность {avg_range:.2f}% (паника)")
                 return False
             return True
         except Exception as e:
-            logger.error(f"Ошибка check_volatility {symbol}: {e}")
+            logger.error(f"Ошибка check_volatility UNKNOWN: {e}")
             return False
 
     async def update_top_symbols(self):
@@ -1084,7 +1084,7 @@ class SmartMoneyBot:
     async def open_position(self, symbol, entry_price, smc_result) -> Optional[Position]:
         global ALLOW_TRADING
         if not ALLOW_TRADING:
-            logger.info(f"Сигнал {symbol} пойман, торговля приостановлена")
+            logger.info(f"Сигнал UNKNOWN пойман, торговля приостановлена")
             return None
         try:
             direction = smc_result.get('direction', 'LONG')
@@ -1104,7 +1104,7 @@ class SmartMoneyBot:
                     return None
 
             dir_emoji = '🟢 LONG' if direction == 'LONG' else '🔴 SHORT'
-            logger.info(f"Открытие {dir_emoji} {symbol}: qty={quantity}, notional=${notional:.2f}")
+            logger.info(f"Открытие {dir_emoji} UNKNOWN: qty={quantity}, notional=${notional:.2f}")
 
             # Кросс-маржа и плечо
             try:
@@ -1179,7 +1179,7 @@ class SmartMoneyBot:
                 )
                 logger.info(f"✅ SL выставлен на бирже: {actual_sl}")
             except Exception as e:
-                logger.warning(f"⚠️ SL не выставлен для {symbol}: {e}")
+                logger.warning(f"⚠️ SL не выставлен для UNKNOWN: {e}")
 
             # ── TP3 на бирже ──
             try:
@@ -1191,7 +1191,7 @@ class SmartMoneyBot:
                     params={'stopPrice': actual_tp, 'closePosition': True, 'workingType': 'MARK_PRICE'}
                 )
             except Exception as e:
-                logger.warning(f"⚠️ TP не выставлен для {symbol}: {e}")
+                logger.warning(f"⚠️ TP не выставлен для UNKNOWN: {e}")
 
             position_id = self.db.add_position(
                 symbol=symbol, side=direction, entry_price=actual_entry,
@@ -1239,12 +1239,12 @@ class SmartMoneyBot:
             )
             self.db.mark_signal_executed(signal_id)
             self.signals_today += 1
-            logger.info(f"Позиция открыта: {direction} {symbol} @ {actual_entry}")
+            logger.info(f"Позиция открыта: {direction} UNKNOWN @ {actual_entry}")
             return position
 
         except Exception as e:
-            logger.error(f"Ошибка открытия позиции {symbol}: {e}")
-            await self.send_telegram_message(f"❌ Ошибка открытия {symbol}: {e}")
+            logger.error(f"Ошибка открытия позиции UNKNOWN: {e}")
+            await self.send_telegram_message(f"❌ Ошибка открытия UNKNOWN: {e}")
             return None
 
     # ────────────────────────────────────────────────────────────────────────
@@ -1266,7 +1266,7 @@ class SmartMoneyBot:
             try:
                 await self.exchange.cancel_all_orders(symbol)
             except Exception as cancel_e:
-                logger.warning(f"Не удалось отменить ордера {symbol}: {cancel_e}")
+                logger.warning(f"Не удалось отменить ордера UNKNOWN: {cancel_e}")
 
             try:
                 if position.side == 'SHORT':
@@ -1274,7 +1274,7 @@ class SmartMoneyBot:
                 else:
                     order = await self.exchange.create_market_sell_order(symbol, qty_close, params={})
             except Exception as order_e:
-                logger.error(f"Ошибка создания ордера закрытия {symbol}: {order_e}")
+                logger.error(f"Ошибка создания ордера закрытия UNKNOWN: {order_e}")
                 raise
 
             exit_price = order.get('average') or order.get('price')
@@ -1322,7 +1322,7 @@ class SmartMoneyBot:
             if emergency:
                 message = f"🚨 ЭКСТРЕННОЕ ЗАКРЫТИЕ\n{message}"
             await self.send_telegram_message(message)
-            logger.info(f"Позиция закрыта: {symbol}, PnL: ${total_pnl:.2f}")
+            logger.info(f"Позиция закрыта: UNKNOWN, PnL: ${total_pnl:.2f}")
             return True
 
         except Exception as e:
@@ -1594,7 +1594,7 @@ class SmartMoneyBot:
 
             smc_result = await self.smc_analyzer.analyze_symbol(symbol)
             if smc_result['signal']:
-                logger.info(f"СИГНАЛ: {symbol} ({smc_result['score']})")
+                logger.info(f"СИГНАЛ: UNKNOWN ({smc_result['score']})")
                 ticker = await self.exchange.fetch_ticker(symbol)
                 entry_price = ticker['last']
                 await self.open_position(symbol, entry_price, smc_result)
@@ -2217,31 +2217,7 @@ if __name__ == '__main__':
 
 
 
-signal_message = f"""
-🔔 SMART MONEY SIGNAL
 
-🟢 {symbol}
-
-🛒 Вход: {entry_price}
-
-🎯 TP1: {tp1}
-🚀 TP2: {tp2}
-💎 TP3: {tp3}
-
-🛑 Стоп: {sl_price}
-
-📊 Анализ:
-✅ EMA200
-✅ RSI
-✅ MACD
-✅ ADX
-✅ BOS
-✅ FVG
-
-📈 RR: 1:{rr_ratio}
-
-💰 Плечо: x{LEVERAGE}
-"""
 
 
 
@@ -2314,7 +2290,7 @@ def format_signal(symbol, entry, tp1, tp2, tp3, sl, rr, leverage):
     return f"""
 🔔 SMART MONEY SIGNAL
 
-🟢 Монета: {symbol}
+🟢 Монета: UNKNOWN
 
 🛒 Вход: {entry}
 
@@ -2381,3 +2357,24 @@ print("⚡ ADAPTIVE SIGNAL ENGINE ENABLED")
 
 print("📡 REALTIME SCANNING ACTIVE")
 print("🧠 BALANCED SMART MONEY MODE")
+
+
+def safe_format_signal(symbol, entry=None, tp1=None, tp2=None, tp3=None, sl=None):
+    try:
+        return f"""
+🔔 SMART MONEY SIGNAL
+
+🟢 Монета: UNKNOWN
+
+🛒 Вход: {entry}
+🎯 TP1: {tp1}
+🚀 TP2: {tp2}
+💎 TP3: {tp3}
+🛑 SL: {sl}
+"""
+    except Exception as e:
+        return f"Signal formatting error: {e}"
+
+
+if __name__ == "__main__":
+    print("🚀 SMART MONEY BOT STARTED")
