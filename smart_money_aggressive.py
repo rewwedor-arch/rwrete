@@ -2700,11 +2700,9 @@ class SmartMoneyBot:
     async def start_telegram_bot(self):
         """Старт Telegram бота с правильным управлением событийным циклом"""
         try:
-            # Используем глобальный event loop
-            loop = asyncio.get_event_loop()
-            
-            # Создаем Application с указанием event loop
-            self.app = Application.builder().token(self.telegram_token).loop(loop).build()
+            # Создаем Telegram Application
+            # В новых версиях python-telegram-bot параметр .loop() удален
+            self.app = Application.builder().token(self.telegram_token).build()
 
             # Добавляем обработчики команд
             self.app.add_handler(CommandHandler("start", self.cmd_start))
