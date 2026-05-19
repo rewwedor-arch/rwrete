@@ -1491,7 +1491,10 @@ class SmartMoneyBot:
                 realized_pnl_usd=0.0,
             )
             
-                        self.positions[position_id] = position
+            self.positions[position_id] = position
+            
+            # Конвертируем текстовый паттерн в число для звездочек
+
             
             # Конвертируем текстовый паттерн в число для звездочек
             raw_score = smc_result['score']
