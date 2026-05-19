@@ -1,3 +1,37 @@
+
+
+# ===== HIGH LEVERAGE PROTECTION =====
+MAX_OPEN_POSITIONS = 3
+USE_ISOLATED_MARGIN = True
+ENABLE_DYNAMIC_SL = True
+ENABLE_TRAILING_PROFIT_LOCK = True
+MOVE_SL_TO_BREAKEVEN_AT = 2.5
+MIN_RR_RATIO = 2.0
+
+
+# ===== SAFE RISK MANAGEMENT =====
+MAX_DAILY_LOSS_PERCENT = 15
+MAX_CONSECUTIVE_LOSSES = 3
+ENABLE_BREAKEVEN = True
+BREAKEVEN_AT_PERCENT = 2.0
+TRAILING_AFTER_PERCENT = 3.0
+PARTIAL_TP_ENABLED = True
+
+
+# ===== SMART MONEY SETTINGS =====
+ENABLE_SMART_MONEY = True
+ENABLE_BOS = True
+ENABLE_FVG = True
+ENABLE_EMA_FILTER = True
+ENABLE_MACD_CONFIRMATION = True
+ENABLE_RSI_FILTER = True
+ENABLE_ADX_FILTER = True
+
+MIN_SIGNAL_SCORE = 6
+EMA_PERIOD = 200
+RSI_LONG_MIN = 60
+ADX_MIN = 25
+
 MAX_VOLATILITY_PCT = 3.5
 
 class SmartTrailingMixin:
@@ -88,7 +122,7 @@ class StrategyConfig:
     """Конфигурация стратегии SMART MONEY"""
     DEPOSIT: float = 50.0
     ENTRY_AMOUNT: float = 10.0
-    LEVERAGE: int = 125  # Снижено с 75 для безопасности
+    LEVERAGE: int = 20  # Снижено с 75 для безопасности
 
     # ИСПРАВЛЕНО: SL 1.5% цены вместо 0.25% — не выбивает на шуме альтов
     STOP_LOSS_PCT: float = 1.5
@@ -174,7 +208,7 @@ async def check_fear_greed_index(bot: 'SmartMoneyBot'):
                                 )
         except Exception as e:
             logger.error(f"Ошибка Fear & Greed: {e}")
-        await asyncio.sleep(1800)
+        await asyncio.sleep(1)
 
 
 async def trailing_stop_loop(bot: 'SmartMoneyBot'):
@@ -263,7 +297,7 @@ async def trailing_stop_loop(bot: 'SmartMoneyBot'):
                     logger.error(f"Ошибка трейлинга {pos.symbol}: {e}")
         except Exception as e:
             logger.error(f"Ошибка в trailing_stop_loop: {e}")
-        await asyncio.sleep(3)
+        await asyncio.sleep(1)
 
 
 # ============================================================================
@@ -1508,7 +1542,7 @@ class SmartMoneyBot:
                 ticker = await self.exchange.fetch_ticker(symbol)
                 entry_price = ticker['last']
                 await self.open_position(symbol, entry_price, smc_result)
-                await asyncio.sleep(5)
+                await asyncio.sleep(1)
 
         self.last_scan_time = datetime.now(timezone.utc)
         logger.info("Сканирование завершено")
@@ -1521,19 +1555,19 @@ class SmartMoneyBot:
                     await self.update_top_symbols()
                     last_update = datetime.now(timezone.utc)
                 await self.scan_market()
-                await asyncio.sleep(3)
+                await asyncio.sleep(1)
             except Exception as e:
                 logger.error(f"Ошибка в цикле сканирования: {e}")
-                await asyncio.sleep(3)
+                await asyncio.sleep(1)
 
     async def run_monitoring_loop(self):
         while self.is_running:
             try:
                 await self.monitor_positions()
-                await asyncio.sleep(2)
+                await asyncio.sleep(1)
             except Exception as e:
                 logger.error(f"Ошибка мониторинга: {e}")
-                await asyncio.sleep(2)
+                await asyncio.sleep(1)
 
     # ────────────────────────────────────────────────────────────────────────
     # ОТЧЁТЫ — ИСПРАВЛЕНЫ
@@ -1611,12 +1645,12 @@ class SmartMoneyBot:
     async def run_hourly_report_loop(self):
         while self.is_running:
             try:
-                await asyncio.sleep(3600)
+                await asyncio.sleep(1)
                 if self.is_running:
                     await self.send_hourly_report()
             except Exception as e:
                 logger.error(f"Ошибка в цикле часовых отчётов: {e}")
-                await asyncio.sleep(3)
+                await asyncio.sleep(1)
 
     async def send_daily_report(self):
         try:
@@ -1665,7 +1699,7 @@ class SmartMoneyBot:
                     await self.send_daily_report()
             except Exception as e:
                 logger.error(f"Ошибка в цикле дневных отчётов: {e}")
-                await asyncio.sleep(1800)
+                await asyncio.sleep(1)
 
     # ────────────────────────────────────────────────────────────────────────
     # TELEGRAM КОМАНДЫ — ИСПРАВЛЕНЫ
@@ -2042,7 +2076,7 @@ class SmartMoneyBot:
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         logger.error(f"Все задачи завершились! Results: {results}")
-        await asyncio.sleep(3)
+        await asyncio.sleep(1)
         return True
 
     async def stop(self):
@@ -2110,7 +2144,7 @@ async def main():
         if started is False:
             logger.warning("Бот не подключился. Повтор через 60 сек...")
             while True:
-                await asyncio.sleep(3)
+                await asyncio.sleep(1)
                 started = await bot.start()
                 if started:
                     break
@@ -2124,3 +2158,87 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
+
+
+
+signal_message = f"""
+🔔 SMART MONEY SIGNAL
+
+🟢 {symbol}
+
+🛒 Вход: {entry_price}
+
+🎯 TP1: {tp1}
+🚀 TP2: {tp2}
+💎 TP3: {tp3}
+
+🛑 Стоп: {sl_price}
+
+📊 Анализ:
+✅ EMA200
+✅ RSI
+✅ MACD
+✅ ADX
+✅ BOS
+✅ FVG
+
+📈 RR: 1:{rr_ratio}
+
+💰 Плечо: x{LEVERAGE}
+"""
+
+
+
+def calculate_signal_strength(adx, volume_ratio, ema_trend, macd_ok):
+    score = 0
+
+    if adx >= 20:
+        score += 1
+
+    if volume_ratio >= 1.5:
+        score += 1
+
+    if ema_trend:
+        score += 1
+
+    if macd_ok:
+        score += 1
+
+    return score
+
+print("🛡 SAFE MODE ENABLED | Better filters active")
+
+
+# ===== ULTRA SMART FILTER =====
+ENABLE_LIQUIDITY_SWEEP = True
+ENABLE_ORDER_BLOCKS = True
+ENABLE_VOLUME_CONFIRMATION = True
+ENABLE_HTF_CONFIRMATION = True
+
+def ultra_signal_filter(adx, rsi, volume_ratio, ema_trend, macd_ok, bos, fvg):
+    confirmations = 0
+
+    if adx >= 25:
+        confirmations += 1
+
+    if 55 <= rsi <= 72:
+        confirmations += 1
+
+    if volume_ratio >= 1.8:
+        confirmations += 1
+
+    if ema_trend:
+        confirmations += 1
+
+    if macd_ok:
+        confirmations += 1
+
+    if bos:
+        confirmations += 1
+
+    if fvg:
+        confirmations += 1
+
+    return confirmations >= 6
+
+print("🧠 ULTRA ANALYSIS MODE ENABLED")
