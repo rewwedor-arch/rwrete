@@ -1,4 +1,9 @@
 
+# ===== REPORT COOLDOWN =====
+LAST_HOURLY_REPORT = 0
+HOURLY_REPORT_INTERVAL = 3600
+
+
 # ===== TITAN INSTITUTIONAL FILTER =====
 ENABLE_HTF_TREND = True
 ENABLE_LIQUIDITY_SWEEP = True
@@ -2378,3 +2383,20 @@ def safe_format_signal(symbol, entry=None, tp1=None, tp2=None, tp3=None, sl=None
 
 if __name__ == "__main__":
     print("🚀 SMART MONEY BOT STARTED")
+
+
+async def safe_hourly_report():
+    global LAST_HOURLY_REPORT
+    import time
+
+    current_time = time.time()
+
+    if current_time - LAST_HOURLY_REPORT < HOURLY_REPORT_INTERVAL:
+        return
+
+    LAST_HOURLY_REPORT = current_time
+
+    try:
+        await send_hourly_report()
+    except Exception as e:
+        print(f"Hourly report error: {e}")
