@@ -1180,7 +1180,7 @@ class SmartMoneyBot:
             tickers = await self.exchange.fetch_tickers()
             usdt_perps = []
             for symbol, market in markets.items():
-                if symbol.endswith('/USDT') and market.get('type') == 'swap':
+                if 'USDT' in symbol and market.get('type') == 'swap':
                     vol = tickers[symbol].get('quoteVolume', 0.0) if symbol in tickers else 0.0
                     usdt_perps.append((symbol, vol))
             usdt_perps.sort(key=lambda x: x[1], reverse=True)
