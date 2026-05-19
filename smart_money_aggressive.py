@@ -7,10 +7,10 @@ ENABLE_ORDER_BLOCK = True
 ENABLE_VOLUME_SPIKE = True
 ENABLE_SESSION_FILTER = True
 
-MIN_ADX = 25
-MIN_VOLUME_RATIO = 1.8
-MIN_RR_RATIO = 2.0
-MAX_OPEN_POSITIONS = 5
+MIN_ADX = 18
+MIN_VOLUME_RATIO = 1.2
+MIN_RR_RATIO = 1.4
+MAX_OPEN_POSITIONS = 10
 
 def institutional_filter(
     adx,
@@ -52,7 +52,7 @@ def institutional_filter(
     if 55 <= rsi <= 70:
         score += 1
 
-    return score >= 7
+    return score >= 4
 
 
 
@@ -62,7 +62,7 @@ USE_ISOLATED_MARGIN = True
 ENABLE_DYNAMIC_SL = True
 ENABLE_TRAILING_PROFIT_LOCK = True
 MOVE_SL_TO_BREAKEVEN_AT = 2.5
-MIN_RR_RATIO = 2.0
+MIN_RR_RATIO = 1.4
 
 
 # ===== SAFE RISK MANAGEMENT =====
@@ -264,7 +264,7 @@ async def check_fear_greed_index(bot: 'SmartMoneyBot'):
                                 )
         except Exception as e:
             logger.error(f"Ошибка Fear & Greed: {e}")
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.5)
 
 
 async def trailing_stop_loop(bot: 'SmartMoneyBot'):
@@ -353,7 +353,7 @@ async def trailing_stop_loop(bot: 'SmartMoneyBot'):
                     logger.error(f"Ошибка трейлинга {pos.symbol}: {e}")
         except Exception as e:
             logger.error(f"Ошибка в trailing_stop_loop: {e}")
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.5)
 
 
 # ============================================================================
@@ -1582,7 +1582,7 @@ class SmartMoneyBot:
         logger.info(f"Сканирование рынка... ({len(self.symbols_to_scan)} символов)")
 
         for symbol in self.symbols_to_scan:
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
             if not self.is_running:
                 break
             if any(p.symbol == symbol for p in self.positions.values()):
@@ -1598,7 +1598,7 @@ class SmartMoneyBot:
                 ticker = await self.exchange.fetch_ticker(symbol)
                 entry_price = ticker['last']
                 await self.open_position(symbol, entry_price, smc_result)
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
 
         self.last_scan_time = datetime.now(timezone.utc)
         logger.info("Сканирование завершено")
@@ -1611,19 +1611,19 @@ class SmartMoneyBot:
                     await self.update_top_symbols()
                     last_update = datetime.now(timezone.utc)
                 await self.scan_market()
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
             except Exception as e:
                 logger.error(f"Ошибка в цикле сканирования: {e}")
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
 
     async def run_monitoring_loop(self):
         while self.is_running:
             try:
                 await self.monitor_positions()
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
             except Exception as e:
                 logger.error(f"Ошибка мониторинга: {e}")
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
 
     # ────────────────────────────────────────────────────────────────────────
     # ОТЧЁТЫ — ИСПРАВЛЕНЫ
@@ -1701,12 +1701,12 @@ class SmartMoneyBot:
     async def run_hourly_report_loop(self):
         while self.is_running:
             try:
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
                 if self.is_running:
                     await self.send_hourly_report()
             except Exception as e:
                 logger.error(f"Ошибка в цикле часовых отчётов: {e}")
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
 
     async def send_daily_report(self):
         try:
@@ -1755,7 +1755,7 @@ class SmartMoneyBot:
                     await self.send_daily_report()
             except Exception as e:
                 logger.error(f"Ошибка в цикле дневных отчётов: {e}")
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
 
     # ────────────────────────────────────────────────────────────────────────
     # TELEGRAM КОМАНДЫ — ИСПРАВЛЕНЫ
@@ -2087,7 +2087,7 @@ class SmartMoneyBot:
             logger.info("Telegram polling запущен")
 
             while self.is_running:
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
 
             if self.app.updater and self.app.updater.running:
                 await self.app.updater.stop()
@@ -2132,7 +2132,7 @@ class SmartMoneyBot:
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         logger.error(f"Все задачи завершились! Results: {results}")
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.5)
         return True
 
     async def stop(self):
@@ -2200,7 +2200,7 @@ async def main():
         if started is False:
             logger.warning("Бот не подключился. Повтор через 60 сек...")
             while True:
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
                 started = await bot.start()
                 if started:
                     break
@@ -2337,3 +2337,47 @@ def format_signal(symbol, entry, tp1, tp2, tp3, sl, rr, leverage):
 📈 RR: 1:{rr}
 ⚡ Плечо: x{leverage}
 """
+
+
+# ===== ADAPTIVE SIGNAL ENGINE =====
+ENABLE_ADAPTIVE_SIGNALS = True
+
+def adaptive_signal_engine(
+    adx,
+    rsi,
+    volume_ratio,
+    ema_trend,
+    macd_ok,
+    bos,
+    fvg
+):
+    score = 0
+
+    if ema_trend:
+        score += 2
+
+    if bos:
+        score += 2
+
+    if adx >= 18:
+        score += 1
+
+    if 50 <= rsi <= 75:
+        score += 1
+
+    if volume_ratio >= 1.2:
+        score += 1
+
+    if macd_ok:
+        score += 1
+
+    if fvg:
+        score += 1
+
+    return score >= 4
+
+print("⚡ ADAPTIVE SIGNAL ENGINE ENABLED")
+
+
+print("📡 REALTIME SCANNING ACTIVE")
+print("🧠 BALANCED SMART MONEY MODE")
