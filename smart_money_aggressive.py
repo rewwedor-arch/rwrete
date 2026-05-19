@@ -2397,13 +2397,12 @@ async def safe_hourly_report():
     LAST_HOURLY_REPORT = current_time
 
     try:
-                pass
-            except Exception as e:
+        pass
+    except Exception as e:
         print(f"Hourly report error: {e}")
 
 
 # ===== SAFE HOURLY REPORT SYSTEM =====
-import time
 
 _last_report_hour = None
 
