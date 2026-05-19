@@ -2397,6 +2397,34 @@ async def safe_hourly_report():
     LAST_HOURLY_REPORT = current_time
 
     try:
-        await send_hourly_report()
+        # disabled broken hourly report
     except Exception as e:
         print(f"Hourly report error: {e}")
+
+
+# ===== SAFE HOURLY REPORT SYSTEM =====
+import time
+
+_last_report_hour = None
+
+async def controlled_hourly_report():
+    global _last_report_hour
+
+    now = time.localtime()
+    current_hour = now.tm_hour
+
+    # Send only once per hour at minute 0
+    if now.tm_min != 0:
+        return
+
+    # Prevent duplicate sends inside same hour
+    if _last_report_hour == current_hour:
+        return
+
+    _last_report_hour = current_hour
+
+    try:
+        await send_hourly_report()
+        print(f"✅ Hourly report sent for hour {current_hour}")
+    except Exception as e:
+        print(f"❌ Hourly report failed: {e}")
