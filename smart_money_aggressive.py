@@ -263,7 +263,7 @@ async def trailing_stop_loop(bot: 'SmartMoneyBot'):
                     logger.error(f"Ошибка трейлинга {pos.symbol}: {e}")
         except Exception as e:
             logger.error(f"Ошибка в trailing_stop_loop: {e}")
-        await asyncio.sleep(10)
+        await asyncio.sleep(3)
 
 
 # ============================================================================
@@ -1237,6 +1237,14 @@ class SmartMoneyBot:
 
         except Exception as e:
             logger.error(f"Ошибка закрытия позиции {position_id}: {e}")
+
+        except Exception as close_error:
+            logger.warning(f"ClosePosition failed: {close_error}")
+            try:
+                side = 'sell' if position_side == 'long' else 'buy'
+                await exchange.create_market_order(symbol, side, amount, params={'reduceOnly': True})
+            except Exception as market_close_error:
+                logger.error(f"Market close fallback failed: {market_close_error}")
             await self.send_telegram_message(f"❌ Ошибка закрытия позиции {position_id}: {e}")
             return False
 
@@ -1513,10 +1521,10 @@ class SmartMoneyBot:
                     await self.update_top_symbols()
                     last_update = datetime.now(timezone.utc)
                 await self.scan_market()
-                await asyncio.sleep(60)
+                await asyncio.sleep(3)
             except Exception as e:
                 logger.error(f"Ошибка в цикле сканирования: {e}")
-                await asyncio.sleep(30)
+                await asyncio.sleep(3)
 
     async def run_monitoring_loop(self):
         while self.is_running:
@@ -1608,7 +1616,7 @@ class SmartMoneyBot:
                     await self.send_hourly_report()
             except Exception as e:
                 logger.error(f"Ошибка в цикле часовых отчётов: {e}")
-                await asyncio.sleep(60)
+                await asyncio.sleep(3)
 
     async def send_daily_report(self):
         try:
@@ -2034,7 +2042,7 @@ class SmartMoneyBot:
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         logger.error(f"Все задачи завершились! Results: {results}")
-        await asyncio.sleep(60)
+        await asyncio.sleep(3)
         return True
 
     async def stop(self):
@@ -2102,7 +2110,7 @@ async def main():
         if started is False:
             logger.warning("Бот не подключился. Повтор через 60 сек...")
             while True:
-                await asyncio.sleep(60)
+                await asyncio.sleep(3)
                 started = await bot.start()
                 if started:
                     break
