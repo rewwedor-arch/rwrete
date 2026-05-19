@@ -1275,12 +1275,17 @@ class SmartMoneyBot:
 
             try:
                 if position.side == 'SHORT':
-                    order = await self.exchange.create_market_buy_order(symbol, qty_close, params={})
+                    order = await self.exchange.create_market_buy_order(symbol, qty_close, params={'reduceOnly': True})
                 else:
-                    order = await self.exchange.create_market_sell_order(symbol, qty_close, params={})
+                    order = await self.exchange.create_market_sell_order(symbol, qty_close, params={'reduceOnly': True})
             except Exception as order_e:
-                logger.error(f"Ошибка создания ордера закрытия UNKNOWN: {order_e}")
-                raise
+                err_str = str(order_e)
+                if 'ReduceOnly' in err_str or '-2022' in err_str or 'reduce-only' in err_str.lower() or 'not found' in err_str.lower() or 'position is zero' in err_str.lower() or 'No need to change position' in err_str:
+                    logger.warning(f"Позиция {symbol} уже была закрыта на бирже. Синхронизируем состояние.")
+                    order = {} 
+                else:
+                    logger.error(f"Ошибка создания ордера закрытия {symbol}: {order_e}")
+                    raise
 
             exit_price = order.get('average') or order.get('price')
             if not exit_price:
@@ -1351,12 +1356,20 @@ class SmartMoneyBot:
             qty_to_close = float(self.exchange.amount_to_precision(position.symbol, qty_to_close))
             if qty_to_close <= 0:
                 return
-            if position.side == 'SHORT':
-                await self.exchange.create_market_buy_order(position.symbol, qty_to_close, params={})
-                chunk_pnl = (position.entry_price - current_price) * qty_to_close
-            else:
-                await self.exchange.create_market_sell_order(position.symbol, qty_to_close, params={})
-                chunk_pnl = (current_price - position.entry_price) * qty_to_close
+            try:
+                if position.side == 'SHORT':
+                    await self.exchange.create_market_buy_order(position.symbol, qty_to_close, params={'reduceOnly': True})
+                    chunk_pnl = (position.entry_price - current_price) * qty_to_close
+                else:
+                    await self.exchange.create_market_sell_order(position.symbol, qty_to_close, params={'reduceOnly': True})
+                    chunk_pnl = (current_price - position.entry_price) * qty_to_close
+            except Exception as e:
+                err_str = str(e)
+                if 'ReduceOnly' in err_str or '-2022' in err_str or 'reduce-only' in err_str.lower() or 'not found' in err_str.lower() or 'position is zero' in err_str.lower() or 'No need to change position' in err_str:
+                    logger.warning(f"Позиция {position.symbol} частично закрыта, но объем уже отсутствует на бирже.")
+                    chunk_pnl = 0
+                else:
+                    raise
             position.realized_pnl_usd += chunk_pnl
             position.remaining_quantity = max(0.0, position.remaining_quantity - qty_to_close)
         except Exception as e:
@@ -1435,6 +1448,15 @@ class SmartMoneyBot:
     async def monitor_positions(self):
         for position_id, position in list(self.positions.items()):
             try:
+                # Синхронизация с биржей, проверяем жива ли позиция
+                positions_now = await self.exchange.fetch_positions([position.symbol])
+                active_pos = next((p for p in positions_now if abs(float(p.get('contracts', 0) or 0)) > 0), None)
+                
+                if not active_pos:
+                    logger.info(f"Синхронизация: {position.symbol} уже закрыта на бирже. Удаляем из бота.")
+                    await self.close_position(position_id)
+                    continue
+
                 ticker = await self.exchange.fetch_ticker(position.symbol)
                 current_price = ticker['last']
 
