@@ -2397,8 +2397,8 @@ async def safe_hourly_report():
     LAST_HOURLY_REPORT = current_time
 
     try:
-        # disabled broken hourly report
-    except Exception as e:
+                pass
+            except Exception as e:
         print(f"Hourly report error: {e}")
 
 
