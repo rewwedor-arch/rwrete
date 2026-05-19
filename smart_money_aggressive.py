@@ -1150,8 +1150,9 @@ class SmartMoneyBot:
         
         # Отдельный Bot для отправки сообщений (работает независимо от polling)
         self._bot = Bot(token=self.telegram_token)
+    async def 
     async def update_top_symbols(self):
-            """Загружает Топ-80 USDT-фьючерсов по объему за 24ч"""
+        """Загружает Топ-80 USDT-фьючерсов по объему за 24ч"""
         try:
             markets = await self.exchange.load_markets()
             tickers = await self.exchange.fetch_tickers()
@@ -1167,6 +1168,7 @@ class SmartMoneyBot:
             logger.error(f"Ошибка обновления топа пар: {e}")
             if not self.symbols_to_scan:
                 self.symbols_to_scan = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT']
+
 
 
 
