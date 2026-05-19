@@ -183,14 +183,16 @@ class StrategyConfig:
     """Конфигурация стратегии SMART MONEY"""
     DEPOSIT: float = 50.0
     ENTRY_AMOUNT: float = 10.0
-    LEVERAGE: int = 75  # Установлено на 75 (максимальное) по запросу
+    LEVERAGE: int = 75  # Максимальное плечо для агрессивного разгона
 
-    # ИСПРАВЛЕНО: SL 1.5% цены вместо 0.25% — не выбивает на шуме альтов
-    STOP_LOSS_PCT: float = 1.5
-    TAKE_PROFIT_PCT: float = 3.0   # TP1 в 2x от SL
-    TAKE_PROFIT: float = 3.0
-    TP2_PCT: float = 5.0
-    TP3_PCT: float = 8.0           # TP3 в ~5x от SL — хороший RR
+    # === SL/TP ОПТИМИЗИРОВАНЫ ДЛЯ x75 ===
+    # SL 0.6% цены = -45% ROE (терпимый убыток, не уничтожает маржу)
+    # Было 1.5% = -112% ROE = полная потеря маржи на каждый SL!
+    STOP_LOSS_PCT: float = 0.6
+    TAKE_PROFIT_PCT: float = 1.5     # TP1 = +112% ROE (быстрая фиксация)
+    TAKE_PROFIT: float = 1.5
+    TP2_PCT: float = 3.0             # TP2 = +225% ROE
+    TP3_PCT: float = 5.0             # TP3 = +375% ROE (на бирже)
 
     DAILY_TARGET_MIN: float = 5.0
     DAILY_TARGET_MAX: float = 15.0
@@ -211,28 +213,28 @@ class StrategyConfig:
     DRAWDOWN_ALERT: float = 12.0
 
     REINVEST_PROFITS: bool = True
-    MIN_SLOT_USDT: float = 8.0
+    MIN_SLOT_USDT: float = 15.0      # Минимум $15 на позицию (не размазываем)
 
     # Откат от пика
     MIN_PEAK_PNL_TO_TRACK: float = 30.0
     PEAK_DRAWDOWN_CLOSE_PCT: float = 10.0
     # Трейлинг
-    TRAILING_ACTIVATE_PCT: float = 40.0
-    TRAILING_DRAWDOWN_CLOSE_PCT: float = 6.0
-    # Частичные TP (в % ROE с плечом)
-    PARTIAL_TP1_PCT: float = 60.0
-    PARTIAL_TP2_PCT: float = 120.0
-    PARTIAL_TP3_PCT: float = 250.0
+    TRAILING_ACTIVATE_PCT: float = 45.0   # Активация при +45% ROE
+    TRAILING_DRAWDOWN_CLOSE_PCT: float = 8.0
+    # Частичные TP (в % ROE с плечом x75)
+    PARTIAL_TP1_PCT: float = 45.0    # 0.6% цены → закрыть 40%, SL→безубыток
+    PARTIAL_TP2_PCT: float = 112.0   # 1.5% цены → закрыть 30%
+    PARTIAL_TP3_PCT: float = 225.0   # 3.0% цены → закрыть остаток
 
     POSITION_TIMEOUT_HOURS: int = 18
 
     # Трейлинг-стоп по цене
-    TRAILING_DISTANCE_PCT: float = 0.5
-    TRAILING_BREAKEVEN_PCT: float = 0.3
+    TRAILING_DISTANCE_PCT: float = 0.3
+    TRAILING_BREAKEVEN_PCT: float = 0.2
 
     # Фильтр волатильности
-    MIN_VOLATILITY_PCT: float = 0.05   # Минимум 0.3% диапазон свечи
-    MAX_VOLATILITY_PCT: float = 25.0   # Максимум 3.5% — паника
+    MIN_VOLATILITY_PCT: float = 0.05
+    MAX_VOLATILITY_PCT: float = 15.0   # Снижено — не торгуем в панике
 
 config = StrategyConfig()
 
@@ -257,7 +259,7 @@ async def check_fear_greed_index(bot: 'SmartMoneyBot'):
                             value = int(entry.get("value", 50))
                             classification = entry.get("value_classification", "Neutral")
                             logger.info(f"Fear & Greed Index: {value} ({classification})")
-                            if value < 25 and ALLOW_TRADING:
+                            if value < 10 and ALLOW_TRADING:
                                 ALLOW_TRADING = False
                                 await bot.send_telegram_message(
                                     f"⚠️ Паника на рынке!\nFear & Greed: {value} ({classification})\nНовые сделки приостановлены."
@@ -1025,7 +1027,7 @@ class SmartMoneyBot:
 
     def compute_optimal_slots(self, virtual_equity: float) -> int:
         raw = int(virtual_equity // config.MIN_SLOT_USDT)
-        return max(1, raw)
+        return max(1, min(raw, 3))  # Макс 3 позиции — не размазываем депозит
 
     async def calculate_position_size(self, entry_price, score=5) -> tuple:
         try:
@@ -1090,7 +1092,10 @@ class SmartMoneyBot:
             market_info = self.exchange.market(symbol)
             min_notional = float(market_info.get('limits', {}).get('cost', {}).get('min', 5))
 
-            quantity, margin, actual_amount = await self.calculate_position_size(entry_price, score=5)
+            real_score = smc_result.get('score', 5)
+            if isinstance(real_score, str):
+                real_score = 7  # паттерн-матч = сильный сигнал
+            quantity, margin, actual_amount = await self.calculate_position_size(entry_price, score=real_score)
             if quantity == 0:
                 return None
 
@@ -1374,14 +1379,18 @@ class SmartMoneyBot:
         new_sl_price = None
         new_level = position.dynamic_sl_level
 
-        if price_change_pct >= 20.0 and position.dynamic_sl_level < 3:
-            new_sl_price = position.entry_price * (0.90 if position.side == 'SHORT' else 1.10)
+        # Пороги пересчитаны для x75: 0.6% цены = 45% ROE
+        if price_change_pct >= 3.0 and position.dynamic_sl_level < 3:
+            # Цена ушла на +3% → SL на +1.5% (зафиксировать половину)
+            new_sl_price = position.entry_price * (1 - 0.015 if position.side == 'SHORT' else 1 + 0.015)
             new_level = 3
-        elif price_change_pct >= 10.0 and position.dynamic_sl_level < 2:
-            new_sl_price = position.entry_price * (0.95 if position.side == 'SHORT' else 1.05)
+        elif price_change_pct >= 1.5 and position.dynamic_sl_level < 2:
+            # Цена ушла на +1.5% → SL на +0.5%
+            new_sl_price = position.entry_price * (1 - 0.005 if position.side == 'SHORT' else 1 + 0.005)
             new_level = 2
-        elif price_change_pct >= 5.0 and position.dynamic_sl_level < 1:
-            new_sl_price = position.entry_price * (0.995 if position.side == 'SHORT' else 1.005)
+        elif price_change_pct >= 0.6 and position.dynamic_sl_level < 1:
+            # Цена ушла на +0.6% (= наш SL) → SL на безубыток (+0.1%)
+            new_sl_price = position.entry_price * (1 - 0.001 if position.side == 'SHORT' else 1 + 0.001)
             new_level = 1
 
         if not new_sl_price:
@@ -1480,20 +1489,29 @@ class SmartMoneyBot:
                     await self.close_position(position_id)
                     continue
 
-                # Анализ тренда для убыточных позиций
-                if price_change_pct <= -1.5 and position.peak_pnl < 5.0:
+                # Анализ тренда для убыточных позиций (с учётом направления)
+                if price_change_pct <= -0.4 and position.peak_pnl < 15.0:
                     try:
                         ohlcv_5m = await self.smc_analyzer.get_ohlcv(position.symbol, '5m', limit=20)
                         if ohlcv_5m and len(ohlcv_5m) >= 10:
                             closes = [c[4] for c in ohlcv_5m]
                             last_5 = closes[-5:]
-                            downtrend = all(last_5[i] >= last_5[i+1] for i in range(len(last_5)-1))
                             ema20 = self.smc_analyzer.calculate_ema(closes, 20)
-                            below_ema = ema20 and current_price < ema20[-1]
-                            if downtrend and below_ema:
+                            should_exit = False
+                            if position.side == 'LONG':
+                                # LONG убыточный: цена падает + тренд вниз + ниже EMA
+                                downtrend = all(last_5[i] >= last_5[i+1] for i in range(len(last_5)-1))
+                                below_ema = ema20 and current_price < ema20[-1]
+                                should_exit = downtrend and below_ema
+                            else:
+                                # SHORT убыточный: цена растёт + тренд вверх + выше EMA
+                                uptrend = all(last_5[i] <= last_5[i+1] for i in range(len(last_5)-1))
+                                above_ema = ema20 and current_price > ema20[-1]
+                                should_exit = uptrend and above_ema
+                            if should_exit:
                                 await self.send_telegram_message(
-                                    f"🔴 РАННИЙ ВЫХОД | {pair}\n"
-                                    f"Убыток: {price_change_pct:+.2f}% | Тренд вниз\n"
+                                    f"🔴 РАННИЙ ВЫХОД | {pair} ({position.side})\n"
+                                    f"Убыток: {price_change_pct:+.2f}% | Тренд против нас\n"
                                     f"PnL: ${pnl_usd:.2f}"
                                 )
                                 await self.close_position(position_id)
@@ -1570,10 +1588,11 @@ class SmartMoneyBot:
         duration = now - position.timestamp
         duration_minutes = duration.total_seconds() / 60
 
-        if position.peak_pnl < 2.0 and duration_minutes > 30:
+        # Таймаут: если за 2 часа не было даже +15% ROE (0.2% цены) — сделка мёртвая
+        if position.peak_pnl < 15.0 and duration_minutes > 120:
             await self.send_telegram_message(
                 f"⏱ ТАЙМАУТ | {position.symbol.replace('/USDT', '')}\n"
-                f"Убыточная позиция {duration_minutes:.0f} мин\n"
+                f"Нет движения за {duration_minutes:.0f} мин\n"
                 f"Пик PnL: +{position.peak_pnl:.1f}% — закрываем"
             )
             await self.close_position(position.id)
