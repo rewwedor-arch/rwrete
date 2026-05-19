@@ -174,8 +174,8 @@ async def task_with_log(task_name: str, coro):
 # ============================================================================
 
 MAX_CONSECUTIVE_LOSSES = 2
-MIN_VOLUME_RATIO = 1.0
-MIN_ADX = 10
+MIN_VOLUME_RATIO = 1.5        # Было 1.0 — слишком много мусорных сигналов
+MIN_ADX = 20                  # Было 10 — входил в боковик без тренда
 TRADE_COOLDOWN_MINUTES = 1
 LOSS_COOLDOWN_MINUTES = 3
 
@@ -1486,8 +1486,62 @@ class SmartMoneyBot:
                         f"Убыток по цене: {price_change_pct:+.2f}%\n"
                         f"PnL: {pnl_pct:+.1f}% (${pnl_usd:.2f})"
                     )
+                    # Переворот: закрываем и открываем в обратную сторону
                     await self.close_position(position_id)
+                    try:
+                        new_dir = 'SHORT' if position.side == 'LONG' else 'LONG'
+                        flip_result = {
+                            'direction': new_dir, 'score': 7,
+                            'bos': 'FLIP', 'fvg': False, 'rsi': 50, 'adx': 25,
+                            'indicators': {'flip_reversal': True, 'momentum': True},
+                            'signal': True
+                        }
+                        await self.send_telegram_message(
+                            f"🔄 ПЕРЕВОРОТ | {pair}\n"
+                            f"{position.side} → {new_dir} (импульс против нас)"
+                        )
+                        await self.open_position(position.symbol, current_price, flip_result)
+                    except Exception as flip_e:
+                        logger.warning(f"Ошибка переворота {pair}: {flip_e}")
                     continue
+
+                # БЫСТРЫЙ ПЕРЕВОРОТ: цена идёт против нас с сильным импульсом
+                if -config.STOP_LOSS_PCT < price_change_pct <= -0.25 and position.peak_pnl < 10.0:
+                    try:
+                        ohlcv_1m = await self.smc_analyzer.get_ohlcv(position.symbol, '1m', limit=8)
+                        if ohlcv_1m and len(ohlcv_1m) >= 5:
+                            closes_1m = [c[4] for c in ohlcv_1m]
+                            volumes_1m = [v[5] for v in ohlcv_1m]
+                            momentum = (closes_1m[-1] - closes_1m[-4]) / closes_1m[-4] * 100
+                            avg_vol = sum(volumes_1m[:-1]) / len(volumes_1m[:-1]) if len(volumes_1m) > 1 else 1
+                            vol_spike = volumes_1m[-1] > avg_vol * 2.0  # Объём x2 = импульс
+
+                            should_flip = False
+                            if position.side == 'LONG' and momentum < -0.15 and vol_spike:
+                                should_flip = True
+                            elif position.side == 'SHORT' and momentum > 0.15 and vol_spike:
+                                should_flip = True
+
+                            if should_flip:
+                                new_dir = 'SHORT' if position.side == 'LONG' else 'LONG'
+                                await self.send_telegram_message(
+                                    f"🔄 БЫСТРЫЙ ПЕРЕВОРОТ | {pair}\n"
+                                    f"{position.side} → {new_dir}\n"
+                                    f"Импульс 1м: {momentum:+.3f}% | Объём: x{volumes_1m[-1]/avg_vol:.1f}\n"
+                                    f"Убыток: {price_change_pct:+.2f}%"
+                                )
+                                await self.close_position(position_id)
+                                flip_result = {
+                                    'direction': new_dir, 'score': 7,
+                                    'bos': 'MOMENTUM_FLIP', 'fvg': False,
+                                    'rsi': 50, 'adx': 25,
+                                    'indicators': {'flip': True, 'volume_spike': True, 'momentum': True},
+                                    'signal': True
+                                }
+                                await self.open_position(position.symbol, current_price, flip_result)
+                                continue
+                    except Exception as e:
+                        logger.warning(f"Ошибка быстрого переворота {pair}: {e}")
 
                 # Анализ тренда для убыточных позиций (с учётом направления)
                 if price_change_pct <= -0.4 and position.peak_pnl < 15.0:
@@ -1626,6 +1680,21 @@ class SmartMoneyBot:
 
             smc_result = await self.smc_analyzer.analyze_symbol(symbol)
             if smc_result['signal']:
+                # ПРОВЕРКА ИМПУЛЬСА 1м: не входим против текущего движения
+                try:
+                    ohlcv_1m = await self.smc_analyzer.get_ohlcv(symbol, '1m', limit=5)
+                    if ohlcv_1m and len(ohlcv_1m) >= 3:
+                        c1m = [c[4] for c in ohlcv_1m]
+                        mom_1m = (c1m[-1] - c1m[-3]) / c1m[-3] * 100
+                        if smc_result['direction'] == 'LONG' and mom_1m < -0.05:
+                            logger.info(f"⛔ {symbol} LONG отклонён: 1м импульс {mom_1m:+.3f}% (вниз)")
+                            continue
+                        if smc_result['direction'] == 'SHORT' and mom_1m > 0.05:
+                            logger.info(f"⛔ {symbol} SHORT отклонён: 1м импульс {mom_1m:+.3f}% (вверх)")
+                            continue
+                except Exception:
+                    pass  # Если не удалось проверить — входим по основному сигналу
+
                 logger.info(f"СИГНАЛ: {symbol} ({smc_result['score']})")
                 ticker = await self.exchange.fetch_ticker(symbol)
                 entry_price = ticker['last']
