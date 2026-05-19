@@ -301,21 +301,21 @@ async def trailing_stop_loop(bot: 'SmartMoneyBot'):
                                     actual_tp = float(bot.exchange.price_to_precision(pos.symbol, pos.entry_price * (1 - config.TP3_PCT / 100)))
                                     await bot.exchange.create_order(
                                         pos.symbol, 'STOP_MARKET', 'BUY', qty_rounded,
-                                        params={'stopPrice': new_sl_price, 'reduceOnly': True}
+                                        params={'stopPrice': new_sl_price, }
                                     )
                                     await bot.exchange.create_order(
                                         pos.symbol, 'TAKE_PROFIT_MARKET', 'BUY', qty_rounded,
-                                        params={'stopPrice': actual_tp, 'reduceOnly': True}
+                                        params={'stopPrice': actual_tp}
                                     )
                                 else:
                                     actual_tp = float(bot.exchange.price_to_precision(pos.symbol, pos.entry_price * (1 + config.TP3_PCT / 100)))
                                     await bot.exchange.create_order(
                                         pos.symbol, 'STOP_MARKET', 'SELL', qty_rounded,
-                                        params={'stopPrice': new_sl_price, 'reduceOnly': True}
+                                        params={'stopPrice': new_sl_price, }
                                     )
                                     await bot.exchange.create_order(
                                         pos.symbol, 'TAKE_PROFIT_MARKET', 'SELL', qty_rounded,
-                                        params={'stopPrice': actual_tp, 'reduceOnly': True}
+                                        params={'stopPrice': actual_tp}
                                     )
                             except Exception as e:
                                 logger.warning(f"Не удалось обновить SL/TP на бирже для {pos.symbol}: {e}")
@@ -1216,6 +1216,51 @@ class Position:
 
 class SmartMoneyBot:
 
+    async def emergency_close_position(self, symbol: str):
+        """
+        Надёжное закрытие позиции Binance Futures.
+        Исправляет ReduceOnly rejected (-2022)
+        """
+
+        try:
+            positions = await self.exchange.fetch_positions([symbol])
+
+            active = None
+            for p in positions:
+                contracts = float(p.get('contracts', 0) or 0)
+
+                if abs(contracts) > 0:
+                    active = p
+                    break
+
+            if not active:
+                self.logger.warning(f"Нет позиции для закрытия: {symbol}")
+                return False
+
+            contracts = abs(float(active['contracts']))
+            side = active.get('side', '').lower()
+
+            # Binance требует противоположную сторону
+            close_side = 'sell' if side == 'long' else 'buy'
+
+            # ВАЖНО:
+            # market order БЕЗ reduceOnly
+            # Binance сам закроет позицию
+            await self.exchange.create_order(
+                symbol=symbol,
+                type='market',
+                side=close_side,
+                amount=contracts
+            )
+
+            self.logger.info(f"Позиция успешно закрыта: {symbol}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Ошибка emergency_close_position: {e}")
+            return False
+
+
     async def safe_close_position(self, symbol, side, amount):
         """
         Безопасное закрытие позиции.
@@ -1599,7 +1644,7 @@ class SmartMoneyBot:
                 await self.exchange.create_order(
                     symbol=symbol, type='TAKE_PROFIT_MARKET', side=close_side,
                     amount=actual_qty,
-                    params={'stopPrice': actual_tp, 'reduceOnly': True}
+                    params={'stopPrice': actual_tp}
                 )
             except Exception as e:
                 logger.warning(f"⚠️ TP не выставлен для {symbol}: {e}")
@@ -1714,11 +1759,11 @@ class SmartMoneyBot:
             try:
                 if position.side == 'SHORT':
                     order = await self.exchange.create_market_buy_order(
-                        symbol, qty_close, params={'reduceOnly': True}
+                        symbol, qty_close, params={}
                     )
                 else:
                     order = await self.exchange.create_market_sell_order(
-                        symbol, qty_close, params={'reduceOnly': True}
+                        symbol, qty_close, params={}
                     )
                 
                 logger.info(f"Ордер на закрытие размещен: {order.get('id', 'N/A')}, статус: {order.get('status', 'N/A')}")
@@ -1827,13 +1872,13 @@ class SmartMoneyBot:
             if position.side == 'SHORT':
                 await self.exchange.create_market_buy_order(
                     position.symbol, qty_to_close,
-                    params={'reduceOnly': True}
+                    params={}
                 )
                 chunk_pnl = (position.entry_price - current_price) * qty_to_close
             else:
                 await self.exchange.create_market_sell_order(
                     position.symbol, qty_to_close,
-                    params={'reduceOnly': True}
+                    params={}
                 )
                 chunk_pnl = (current_price - position.entry_price) * qty_to_close
             position.realized_pnl_usd += chunk_pnl
@@ -1918,12 +1963,12 @@ class SmartMoneyBot:
                 await self.exchange.create_order(
                     symbol=position.symbol, type='STOP_MARKET', side=close_side,
                     amount=qty_rounded,
-                    params={'stopPrice': new_sl_price, 'reduceOnly': True}
+                    params={'stopPrice': new_sl_price, }
                 )
                 await self.exchange.create_order(
                     symbol=position.symbol, type='TAKE_PROFIT_MARKET', side=close_side,
                     amount=qty_rounded,
-                    params={'stopPrice': actual_tp, 'reduceOnly': True}
+                    params={'stopPrice': actual_tp}
                 )
                 position.stop_loss = new_sl_price
                 position.dynamic_sl_level = new_level
