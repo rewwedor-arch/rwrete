@@ -1491,11 +1491,14 @@ class SmartMoneyBot:
                 realized_pnl_usd=0.0,
             )
             
-            self.positions[position_id] = position
+                        self.positions[position_id] = position
             
-            score = smc_result['score']
+            # Конвертируем текстовый паттерн в число для звездочек
+            raw_score = smc_result['score']
+            score = 7 if isinstance(raw_score, str) else raw_score
             quality = "★★★ СИЛЬНЫЙ" if score >= 6 else ("★★☆ ХОРОШИЙ" if score >= 5 else "★☆☆ СРЕДНИЙ")
             rr = config.TP3_PCT / config.STOP_LOSS_PCT if config.STOP_LOSS_PCT > 0 else 0
+
 
             message = (
                 f"✅ ПОЗИЦИЯ ОТКРЫТА\n"
