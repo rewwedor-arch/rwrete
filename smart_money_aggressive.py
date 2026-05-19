@@ -185,14 +185,12 @@ class StrategyConfig:
     ENTRY_AMOUNT: float = 10.0
     LEVERAGE: int = 75  # Максимальное плечо для агрессивного разгона
 
-    # === SL/TP ОПТИМИЗИРОВАНЫ ДЛЯ x75 ===
-    # SL 0.6% цены = -45% ROE (терпимый убыток, не уничтожает маржу)
-    # Было 1.5% = -112% ROE = полная потеря маржи на каждый SL!
-    STOP_LOSS_PCT: float = 0.6
-    TAKE_PROFIT_PCT: float = 1.5     # TP1 = +112% ROE (быстрая фиксация)
-    TAKE_PROFIT: float = 1.5
-    TP2_PCT: float = 3.0             # TP2 = +225% ROE
-    TP3_PCT: float = 5.0             # TP3 = +375% ROE (на бирже)
+    # === SL/TP ДЛЯ СКАЛЬПИНГА x75 ===
+    STOP_LOSS_PCT: float = 0.4       # -30% ROE: потеря $3 с $10 маржи
+    TAKE_PROFIT_PCT: float = 0.8     # TP1 +60% ROE: прибыль $6 с $10
+    TAKE_PROFIT: float = 0.8
+    TP2_PCT: float = 1.5             # TP2 +112% ROE
+    TP3_PCT: float = 3.0             # TP3 +225% ROE (на бирже)
 
     DAILY_TARGET_MIN: float = 5.0
     DAILY_TARGET_MAX: float = 15.0
@@ -213,28 +211,28 @@ class StrategyConfig:
     DRAWDOWN_ALERT: float = 12.0
 
     REINVEST_PROFITS: bool = True
-    MIN_SLOT_USDT: float = 15.0      # Минимум $15 на позицию (не размазываем)
+    MIN_SLOT_USDT: float = 5.0       # Мин $5 — позволяет 5+ мелких позиций
 
     # Откат от пика
-    MIN_PEAK_PNL_TO_TRACK: float = 30.0
-    PEAK_DRAWDOWN_CLOSE_PCT: float = 10.0
+    MIN_PEAK_PNL_TO_TRACK: float = 25.0
+    PEAK_DRAWDOWN_CLOSE_PCT: float = 8.0
     # Трейлинг
-    TRAILING_ACTIVATE_PCT: float = 45.0   # Активация при +45% ROE
-    TRAILING_DRAWDOWN_CLOSE_PCT: float = 8.0
-    # Частичные TP (в % ROE с плечом x75)
-    PARTIAL_TP1_PCT: float = 45.0    # 0.6% цены → закрыть 40%, SL→безубыток
-    PARTIAL_TP2_PCT: float = 112.0   # 1.5% цены → закрыть 30%
-    PARTIAL_TP3_PCT: float = 225.0   # 3.0% цены → закрыть остаток
+    TRAILING_ACTIVATE_PCT: float = 30.0
+    TRAILING_DRAWDOWN_CLOSE_PCT: float = 6.0
+    # Частичные TP (в % ROE)
+    PARTIAL_TP1_PCT: float = 30.0    # 0.4% цены → закрыть 40%, SL→безубыток
+    PARTIAL_TP2_PCT: float = 60.0    # 0.8% цены → закрыть 30%
+    PARTIAL_TP3_PCT: float = 112.0   # 1.5% цены → закрыть остаток
 
     POSITION_TIMEOUT_HOURS: int = 18
 
     # Трейлинг-стоп по цене
-    TRAILING_DISTANCE_PCT: float = 0.3
-    TRAILING_BREAKEVEN_PCT: float = 0.2
+    TRAILING_DISTANCE_PCT: float = 0.2
+    TRAILING_BREAKEVEN_PCT: float = 0.15
 
     # Фильтр волатильности
     MIN_VOLATILITY_PCT: float = 0.05
-    MAX_VOLATILITY_PCT: float = 15.0   # Снижено — не торгуем в панике
+    MAX_VOLATILITY_PCT: float = 15.0
 
 config = StrategyConfig()
 
@@ -1026,8 +1024,8 @@ class SmartMoneyBot:
             pass
 
     def compute_optimal_slots(self, virtual_equity: float) -> int:
-        raw = int(virtual_equity // config.MIN_SLOT_USDT)
-        return max(1, min(raw, 3))  # Макс 3 позиции — не размазываем депозит
+        raw = int(virtual_equity // config.ENTRY_AMOUNT)  # $10 на слот
+        return max(1, min(raw, 5))  # Макс 5 позиций по ~$10
 
     async def calculate_position_size(self, entry_price, score=5) -> tuple:
         try:
@@ -1045,8 +1043,8 @@ class SmartMoneyBot:
             logger.info(f"💰 Баланс: виртуальный=${virtual_equity:.2f} | слотов={optimal_slots} | свободно=${free_equity:.2f}")
 
             base_slot = free_equity / optimal_slots
-            weight = max(score if isinstance(score, (int, float)) else 5, config.MIN_INDICATORS_SCORE) / 5.0
-            amount_usdt = min(base_slot * weight, free_equity)
+            # Не раздуваем позицию сверх слота — строго $10 на сделку
+            amount_usdt = min(base_slot, config.ENTRY_AMOUNT * 1.5)
 
             if amount_usdt < config.MIN_SLOT_USDT:
                 if free_equity >= config.MIN_SLOT_USDT:
@@ -1379,18 +1377,25 @@ class SmartMoneyBot:
         new_sl_price = None
         new_level = position.dynamic_sl_level
 
-        # Пороги пересчитаны для x75: 0.6% цены = 45% ROE
-        if price_change_pct >= 3.0 and position.dynamic_sl_level < 3:
-            # Цена ушла на +3% → SL на +1.5% (зафиксировать половину)
-            new_sl_price = position.entry_price * (1 - 0.015 if position.side == 'SHORT' else 1 + 0.015)
+        # Пороги для x75 скальпинга: быстрый безубыток
+        if price_change_pct >= 1.5 and position.dynamic_sl_level < 3:
+            if position.side == 'SHORT':
+                new_sl_price = position.entry_price * (1 - 0.008)
+            else:
+                new_sl_price = position.entry_price * (1 + 0.008)
             new_level = 3
-        elif price_change_pct >= 1.5 and position.dynamic_sl_level < 2:
-            # Цена ушла на +1.5% → SL на +0.5%
-            new_sl_price = position.entry_price * (1 - 0.005 if position.side == 'SHORT' else 1 + 0.005)
+        elif price_change_pct >= 0.8 and position.dynamic_sl_level < 2:
+            if position.side == 'SHORT':
+                new_sl_price = position.entry_price * (1 - 0.003)
+            else:
+                new_sl_price = position.entry_price * (1 + 0.003)
             new_level = 2
-        elif price_change_pct >= 0.6 and position.dynamic_sl_level < 1:
-            # Цена ушла на +0.6% (= наш SL) → SL на безубыток (+0.1%)
-            new_sl_price = position.entry_price * (1 - 0.001 if position.side == 'SHORT' else 1 + 0.001)
+        elif price_change_pct >= 0.3 and position.dynamic_sl_level < 1:
+            # БЕЗУБЫТОК при +0.3% цены (+22% ROE) — защита прибыли!
+            if position.side == 'SHORT':
+                new_sl_price = position.entry_price * (1 - 0.001)
+            else:
+                new_sl_price = position.entry_price * (1 + 0.001)
             new_level = 1
 
         if not new_sl_price:
@@ -1399,12 +1404,6 @@ class SmartMoneyBot:
         is_better_sl = (new_sl_price < position.stop_loss) if position.side == 'SHORT' else \
                        (new_sl_price > position.stop_loss)
         if not is_better_sl:
-            return
-
-        # Проверяем дистанцию от текущей цены
-        too_close = (new_sl_price <= current_price * 1.005) if position.side == 'SHORT' else \
-                    (new_sl_price >= current_price * 0.995)
-        if too_close:
             return
 
         try:
