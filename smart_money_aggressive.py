@@ -1244,7 +1244,7 @@ class SmartMoneyBot:
 
             close_side = 'sell' if side.lower() == 'long' else 'buy'
 
-            # replaced by safe_close_position
+            pass
 
             self.logger.info(f"Позиция закрыта: {symbol}")
             return True
@@ -1590,7 +1590,7 @@ class SmartMoneyBot:
             
             # 3. SL
             try:
-                # replaced by safe_close_position
+                pass
             except Exception as e:
                 logger.warning(f"⚠️ SL не выставлен для {symbol}: {e}")
             
