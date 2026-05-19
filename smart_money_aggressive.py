@@ -183,7 +183,7 @@ class StrategyConfig:
     """Конфигурация стратегии SMART MONEY"""
     DEPOSIT: float = 50.0
     ENTRY_AMOUNT: float = 10.0
-    LEVERAGE: int = 20  # Снижено с 75 для безопасности
+    LEVERAGE: int = 75  # Установлено на 75 (максимальное) по запросу
 
     # ИСПРАВЛЕНО: SL 1.5% цены вместо 0.25% — не выбивает на шуме альтов
     STOP_LOSS_PCT: float = 1.5
@@ -286,26 +286,20 @@ async def trailing_stop_loop(bot: 'SmartMoneyBot'):
                     else:
                         price_change_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100
 
-                    if price_change_pct >= config.TRAILING_ACTIVATE_PCT / config.LEVERAGE:
-                        if not pos.trailing_active:
-                            pos.trailing_active = True
-                            pos.trailing_peak = price_change_pct
-                            logger.info(f"Трейлинг активирован {pos.symbol}: {price_change_pct:+.2f}%")
+                    if pos.trailing_active:
+                        # Получаем пиковое движение в процентах от цены (trailing_peak у нас в ROE)
+                        peak_price_pct = pos.trailing_peak / pos.leverage
 
-                        if price_change_pct > pos.trailing_peak:
-                            pos.trailing_peak = price_change_pct
-
-                        # ИСПРАВЛЕНО: для SHORT SL движется вниз (в сторону прибыли)
                         if pos.side == 'SHORT':
-                            new_sl_price = pos.entry_price * (1 - (pos.trailing_peak - config.TRAILING_DISTANCE_PCT) / 100)
+                            new_sl_price = pos.entry_price * (1 - (peak_price_pct - config.TRAILING_DISTANCE_PCT) / 100)
                             should_update = new_sl_price < pos.stop_loss
-                            min_sl = pos.entry_price * (1 + config.TRAILING_BREAKEVEN_PCT / 100)
+                            min_sl = pos.entry_price * (1 - config.TRAILING_BREAKEVEN_PCT / 100)
                             if new_sl_price > min_sl:
                                 new_sl_price = min_sl
                         else:
-                            new_sl_price = pos.entry_price * (1 + (pos.trailing_peak - config.TRAILING_DISTANCE_PCT) / 100)
+                            new_sl_price = pos.entry_price * (1 + (peak_price_pct - config.TRAILING_DISTANCE_PCT) / 100)
                             should_update = new_sl_price > pos.stop_loss
-                            min_sl = pos.entry_price * (1 - config.TRAILING_BREAKEVEN_PCT / 100)
+                            min_sl = pos.entry_price * (1 + config.TRAILING_BREAKEVEN_PCT / 100)
                             if new_sl_price < min_sl:
                                 new_sl_price = min_sl
 
