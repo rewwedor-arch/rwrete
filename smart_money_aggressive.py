@@ -84,14 +84,14 @@ class StrategyConfig:
     # Финансовые параметры
     DEPOSIT: float = 50.0  # Стартовый депозит USDT
     ENTRY_AMOUNT: float = 50.0  # Базовая сумма (используется если REINVEST=False)
-    LEVERAGE: int = 75  # Максимальное плечо (x75)
+    LEVERAGE: int = 50  # Максимальное плечо (x75)
 
     # Риск-менеджмент — ШИРОКИЙ КОРИДОР для высоковолатильных альтов
-    STOP_LOSS_PCT: float = 0.8  # SL -3.5% от цены (чтобы не выбивало шумом)
-    TAKE_PROFIT_PCT: float = 3.0  # TP1 +3.0% (быстрый фикс)
+    STOP_LOSS_PCT: float = 1.2  # SL -3.5% от цены (чтобы не выбивало шумом)
+    TAKE_PROFIT_PCT: float = 4.5  # TP1 +3.0% (быстрый фикс)
     TAKE_PROFIT: float = TAKE_PROFIT_PCT  # Backward compatibility for code that uses TAKE_PROFIT
-    TP2_PCT: float = 6.0  # TP2 +6.0% (основной профит)
-    TP3_PCT: float = 12.0  # TP3 +12.0% (луншот)
+    TP2_PCT: float = 9.0  # TP2 +6.0% (основной профит)
+    TP3_PCT: float = 18.0  # TP3 +12.0% (луншот)
 
     # Цели
     DAILY_TARGET_MIN: float = 10.0  # Минимальная цель в день %
@@ -102,7 +102,7 @@ class StrategyConfig:
     DIRECTION: str = "BOTH"  # LONG и SHORT
 
     # Параметры сигналов — КЛАССИЧЕСКИЕ 7 ИНДИКАТОРОВ
-    MIN_INDICATORS_SCORE: int = 4  # Минимум 4 из 7
+    MIN_INDICATORS_SCORE: int = 5  # Минимум 4 из 7
     TOTAL_INDICATORS: int = 7
 
     # Таймфреймы
@@ -139,23 +139,23 @@ class StrategyConfig:
     # Чем больше денег, тем больше позиций бот может открыть одновременно.
     # Сильные сигналы (7/7) получают больше денег, слабые (4/7) - меньше.
     # ===================================================================
-    MIN_SLOT_USDT: float = 5.0     # Минимальный капитал на 1 сделку ($)
+    MIN_SLOT_USDT: float = 8.0     # Минимальный капитал на 1 сделку ($)
 
     # Выход по откату от пика (в % ROE)
     MIN_PEAK_PNL_TO_TRACK: float = 20.0    # Следим за пиком с +20% ROE (было 30)
-    PEAK_DRAWDOWN_CLOSE_PCT: float = 8.0    # Закрыть при откате 8% ROE от пика (было 15)
+    PEAK_DRAWDOWN_CLOSE_PCT: float = 6.0    # Закрыть при откате 8% ROE от пика (было 15)
     TRAILING_ACTIVATE_PCT: float = 35.0     # Трейлинг после +35% ROE (было 45)
-    TRAILING_DRAWDOWN_CLOSE_PCT: float = 5.0 # Жёсткий трейлинг: закрыть при откате 5% (было 10)
-    PARTIAL_TP1_PCT: float = 15.0   # Фиксируем 30% при +22% ROE
-    PARTIAL_TP2_PCT: float = 30.0   # Фиксируем ещё 30% при +40% ROE
-    PARTIAL_TP3_PCT: float = 50.0   # Полная фиксация при +60% ROE
+    TRAILING_DRAWDOWN_CLOSE_PCT: float = 4.0 # Жёсткий трейлинг: закрыть при откате 5% (было 10)
+    PARTIAL_TP1_PCT: float = 20.0   # Фиксируем 30% при +22% ROE
+    PARTIAL_TP2_PCT: float = 45.0   # Фиксируем ещё 30% при +40% ROE
+    PARTIAL_TP3_PCT: float = 80.0   # Полная фиксация при +60% ROE
 
     # Время позиции
-    POSITION_TIMEOUT_HOURS: int = 36
+    POSITION_TIMEOUT_HOURS: int = 18
 
     # Трейлинг-стоп (в % цены, без плеча)
     TRAILING_ACTIVATE_PCT: float = 1.0      # Активировать трейлинг при +1% цены
-    TRAILING_DISTANCE_PCT: float = 0.5      # Дистанция SL от пика (0.5% цены)
+    TRAILING_DISTANCE_PCT: float = 0.35      # Дистанция SL от пика (0.5% цены)
     TRAILING_BREAKEVEN_PCT: float = 0.2     # Безубыток: SL на 0.2% от входа
 
 config = StrategyConfig()
@@ -164,6 +164,11 @@ config = StrategyConfig()
 # ПРЕДОХРАНИТЕЛЬ: НОВОСТНОЙ ФОН / НАСТРОЕНИЕ РЫНКА
 # ============================================================================
 ALLOW_TRADING = True
+
+# === AGGRESSIVE SMART FILTER ===
+MAX_CONSECUTIVE_LOSSES = 3
+LOSS_COOLDOWN_MINUTES = 45
+
 
 async def check_fear_greed_index(bot: 'SmartMoneyBot'):
     """Фоновая проверка Crypto Fear & Greed Index каждые 30 минут.
@@ -200,6 +205,11 @@ async def check_fear_greed_index(bot: 'SmartMoneyBot'):
 
                             elif value >= 25 and not ALLOW_TRADING:
                                 ALLOW_TRADING = True
+
+# === AGGRESSIVE SMART FILTER ===
+MAX_CONSECUTIVE_LOSSES = 3
+LOSS_COOLDOWN_MINUTES = 45
+
                                 msg = (
                                     f"✅ Рынок успокоился.\n"
                                     f"Fear & Greed Index: {value} ({classification})\n"
