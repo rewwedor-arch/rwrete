@@ -225,27 +225,37 @@ async def trailing_stop_loop(bot: 'SmartMoneyBot'):
                                 if qty_rounded <= 0:
                                     continue
                                 await bot.exchange.cancel_all_orders(pos.symbol)
+                                # Защита от Binance -2022 ReduceOnly rejected
+                                positions_now = await bot.exchange.fetch_positions([pos.symbol])
+                                active_pos = next(
+                                    (p for p in positions_now if abs(float(p.get('contracts', 0) or 0)) > 0),
+                                    None
+                                )
+                                if not active_pos:
+                                    logger.warning(f"Позиция {pos.symbol} уже закрыта, SL/TP не обновляем")
+                                    continue
+
                                 if pos.side == 'SHORT':
                                     actual_tp = float(bot.exchange.price_to_precision(
                                         pos.symbol, pos.entry_price * (1 - config.TP3_PCT / 100)))
                                     await bot.exchange.create_order(
                                         pos.symbol, 'STOP_MARKET', 'BUY', qty_rounded,
-                                        params={'stopPrice': new_sl_price, 'closePosition': True}
+                                        params={'stopPrice': new_sl_price, 'closePosition': True, 'workingType': 'MARK_PRICE'}
                                     )
                                     await bot.exchange.create_order(
                                         pos.symbol, 'TAKE_PROFIT_MARKET', 'BUY', qty_rounded,
-                                        params={'stopPrice': actual_tp, 'closePosition': True}
+                                        params={'stopPrice': actual_tp, 'closePosition': True, 'workingType': 'MARK_PRICE'}
                                     )
                                 else:
                                     actual_tp = float(bot.exchange.price_to_precision(
                                         pos.symbol, pos.entry_price * (1 + config.TP3_PCT / 100)))
                                     await bot.exchange.create_order(
                                         pos.symbol, 'STOP_MARKET', 'SELL', qty_rounded,
-                                        params={'stopPrice': new_sl_price, 'closePosition': True}
+                                        params={'stopPrice': new_sl_price, 'closePosition': True, 'workingType': 'MARK_PRICE'}
                                     )
                                     await bot.exchange.create_order(
                                         pos.symbol, 'TAKE_PROFIT_MARKET', 'SELL', qty_rounded,
-                                        params={'stopPrice': actual_tp, 'closePosition': True}
+                                        params={'stopPrice': actual_tp, 'closePosition': True, 'workingType': 'MARK_PRICE'}
                                     )
                             except Exception as e:
                                 logger.warning(f"Не удалось обновить SL/TP {pos.symbol}: {e}")
@@ -1075,7 +1085,7 @@ class SmartMoneyBot:
                     type='STOP_MARKET',
                     side=close_side,
                     amount=actual_qty,
-                    params={'stopPrice': actual_sl, 'closePosition': True}
+                    params={'stopPrice': actual_sl, 'closePosition': True, 'workingType': 'MARK_PRICE'}
                 )
                 logger.info(f"✅ SL выставлен на бирже: {actual_sl}")
             except Exception as e:
@@ -1088,7 +1098,7 @@ class SmartMoneyBot:
                     type='TAKE_PROFIT_MARKET',
                     side=close_side,
                     amount=actual_qty,
-                    params={'stopPrice': actual_tp, 'closePosition': True}
+                    params={'stopPrice': actual_tp, 'closePosition': True, 'workingType': 'MARK_PRICE'}
                 )
             except Exception as e:
                 logger.warning(f"⚠️ TP не выставлен для {symbol}: {e}")
@@ -1304,12 +1314,12 @@ class SmartMoneyBot:
             await self.exchange.create_order(
                 symbol=position.symbol, type='STOP_MARKET', side=close_side,
                 amount=qty_rounded,
-                params={'stopPrice': new_sl_price, 'closePosition': True}
+                params={'stopPrice': new_sl_price, 'closePosition': True, 'workingType': 'MARK_PRICE'}
             )
             await self.exchange.create_order(
                 symbol=position.symbol, type='TAKE_PROFIT_MARKET', side=close_side,
                 amount=qty_rounded,
-                params={'stopPrice': actual_tp, 'closePosition': True}
+                params={'stopPrice': actual_tp, 'closePosition': True, 'workingType': 'MARK_PRICE'}
             )
             position.stop_loss = new_sl_price
             position.dynamic_sl_level = new_level
