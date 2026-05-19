@@ -79,16 +79,16 @@ async def task_with_log(task_name: str, coro):
 # ============================================================================
 
 MAX_CONSECUTIVE_LOSSES = 2
-MIN_VOLUME_RATIO = 2.0
-MIN_ADX = 22
-TRADE_COOLDOWN_MINUTES = 15
-LOSS_COOLDOWN_MINUTES = 45
+MIN_VOLUME_RATIO = 1.0
+MIN_ADX = 10
+TRADE_COOLDOWN_MINUTES = 1
+LOSS_COOLDOWN_MINUTES = 3
 
 class StrategyConfig:
     """Конфигурация стратегии SMART MONEY"""
     DEPOSIT: float = 50.0
-    ENTRY_AMOUNT: float = 50.0
-    LEVERAGE: int = 20  # Снижено с 75 для безопасности
+    ENTRY_AMOUNT: float = 10.0
+    LEVERAGE: int = 125  # Снижено с 75 для безопасности
 
     # ИСПРАВЛЕНО: SL 1.5% цены вместо 0.25% — не выбивает на шуме альтов
     STOP_LOSS_PCT: float = 1.5
@@ -103,7 +103,7 @@ class StrategyConfig:
     WORK_HOURS: str = "24/7"
     DIRECTION: str = "BOTH"
 
-    MIN_INDICATORS_SCORE: int = 5
+    MIN_INDICATORS_SCORE: int = 2
     TOTAL_INDICATORS: int = 7
 
     SCANNER_TIMEFRAME: str = '5m'
@@ -136,8 +136,8 @@ class StrategyConfig:
     TRAILING_BREAKEVEN_PCT: float = 0.3
 
     # Фильтр волатильности
-    MIN_VOLATILITY_PCT: float = 0.3   # Минимум 0.3% диапазон свечи
-    MAX_VOLATILITY_PCT: float = 3.5   # Максимум 3.5% — паника
+    MIN_VOLATILITY_PCT: float = 0.05   # Минимум 0.3% диапазон свечи
+    MAX_VOLATILITY_PCT: float = 25.0   # Максимум 3.5% — паника
 
 config = StrategyConfig()
 
