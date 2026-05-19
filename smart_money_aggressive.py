@@ -1,4 +1,60 @@
 
+# ===== TITAN INSTITUTIONAL FILTER =====
+ENABLE_HTF_TREND = True
+ENABLE_LIQUIDITY_SWEEP = True
+ENABLE_FVG_RETEST = True
+ENABLE_ORDER_BLOCK = True
+ENABLE_VOLUME_SPIKE = True
+ENABLE_SESSION_FILTER = True
+
+MIN_ADX = 25
+MIN_VOLUME_RATIO = 1.8
+MIN_RR_RATIO = 2.0
+MAX_OPEN_POSITIONS = 5
+
+def institutional_filter(
+    adx,
+    volume_ratio,
+    ema_trend,
+    macd_ok,
+    bos,
+    fvg,
+    liquidity_sweep,
+    order_block,
+    rsi
+):
+    score = 0
+
+    if adx >= 25:
+        score += 1
+
+    if volume_ratio >= 1.8:
+        score += 1
+
+    if ema_trend:
+        score += 1
+
+    if macd_ok:
+        score += 1
+
+    if bos:
+        score += 1
+
+    if fvg:
+        score += 1
+
+    if liquidity_sweep:
+        score += 1
+
+    if order_block:
+        score += 1
+
+    if 55 <= rsi <= 70:
+        score += 1
+
+    return score >= 7
+
+
 
 # ===== HIGH LEVERAGE PROTECTION =====
 MAX_OPEN_POSITIONS = 3
@@ -2242,3 +2298,42 @@ def ultra_signal_filter(adx, rsi, volume_ratio, ema_trend, macd_ok, bos, fvg):
     return confirmations >= 6
 
 print("🧠 ULTRA ANALYSIS MODE ENABLED")
+
+
+# ===== ENTRY QUALITY =====
+USE_LIMIT_ENTRY = True
+ENTRY_ON_FVG_RETEST = True
+WAIT_FOR_CANDLE_CONFIRMATION = True
+USE_BREAK_EVEN = True
+BREAK_EVEN_AFTER = 2.0
+TRAILING_AFTER = 4.0
+
+print("🧠 TITAN SMART MONEY MODE ENABLED")
+
+def format_signal(symbol, entry, tp1, tp2, tp3, sl, rr, leverage):
+    return f"""
+🔔 SMART MONEY SIGNAL
+
+🟢 Монета: {symbol}
+
+🛒 Вход: {entry}
+
+🎯 TP1: {tp1}
+🚀 TP2: {tp2}
+💎 TP3: {tp3}
+
+🛑 SL: {sl}
+
+📊 Анализ:
+✅ BOS
+✅ FVG
+✅ EMA200
+✅ RSI
+✅ ADX
+✅ MACD
+✅ Volume Spike
+✅ Liquidity Sweep
+
+📈 RR: 1:{rr}
+⚡ Плечо: x{leverage}
+"""
