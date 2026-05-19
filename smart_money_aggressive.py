@@ -79,7 +79,9 @@ async def task_with_log(task_name: str, coro):
 # ============================================================================
 
 # === SAFE AGGRESSIVE CONFIG ===
-MAX_CONSECUTIVE_LOSSES = 3
+MAX_CONSECUTIVE_LOSSES = 2
+MIN_VOLUME_RATIO = 2.0
+MIN_ADX = 22
 TRADE_COOLDOWN_MINUTES = 15
 LOSS_COOLDOWN_MINUTES = 45
 
@@ -88,14 +90,14 @@ class StrategyConfig:
     # Финансовые параметры
     DEPOSIT: float = 50.0  # Стартовый депозит USDT
     ENTRY_AMOUNT: float = 50.0  # Базовая сумма (используется если REINVEST=False)
-    LEVERAGE: int = 50  # Максимальное плечо (x75)
+    LEVERAGE: int = 8  # Сильно снижено для защиты депозита  # Максимальное плечо (x75)
 
     # Риск-менеджмент — ШИРОКИЙ КОРИДОР для высоковолатильных альтов
-    STOP_LOSS_PCT: float = 0.4  # Узкий SL для нормального Risk/Reward  # SL -3.5% от цены (чтобы не выбивало шумом)
+    STOP_LOSS_PCT: float = 0.25  # Узкий SL для нормального Risk/Reward  # SL -3.5% от цены (чтобы не выбивало шумом)
     TAKE_PROFIT_PCT: float = 1.2  # TP1 больше стопа в 3 раза  # TP1 +3.0% (быстрый фикс)
     TAKE_PROFIT: float = TAKE_PROFIT_PCT  # Backward compatibility for code that uses TAKE_PROFIT
     TP2_PCT: float = 2.4  # TP2 +6.0% (основной профит)
-    TP3_PCT: float = 4.0  # TP3 +12.0% (луншот)
+    TP3_PCT: float = 1.8  # TP3 +12.0% (луншот)
 
     # Цели
     DAILY_TARGET_MIN: float = 10.0  # Минимальная цель в день %
