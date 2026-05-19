@@ -1874,39 +1874,40 @@ class SmartMoneyBot:
                         await self.close_position(position_id)
                         continue
 
-                # 7. ЧАСТИЧНАЯ ФИКСАЦИЯ (пороги выше — реже режем прибыль в начале движения)
-if pnl_pct >= config.PARTIAL_TP1_PCT and not position.partial_tp1_done:
-    position.partial_tp1_done = True
-    qty_to_close = position.quantity * 0.40  # ЗАКРЫВАЕМ 40%
-    await self.close_partial_position(position, qty_to_close, current_price)
-    # СРАЗУ переводим SL в безубыток
-    position.dynamic_sl_level = 1
-    await self.apply_dynamic_sl(position, price_change_pct, current_price)
-    await self.send_telegram_message(
-        f"💰 ЧАСТИЧНАЯ ФИКСАЦИЯ | {pair}\n"
-        f"TP1 +{config.PARTIAL_TP1_PCT:.0f}% ROE достигнут\n"
-        f"Закрыто: 40% позиции | SL в безубыток"
-    )
 
-if pnl_pct >= config.PARTIAL_TP2_PCT and not position.partial_tp2_done:
-    position.partial_tp2_done = True
-    qty_to_close = position.quantity * 0.30  # ЗАКРЫВАЕМ ЕЩЕ 30%
-    await self.close_partial_position(position, qty_to_close, current_price)
-    await self.send_telegram_message(
-        f"🚀 TP2 ДОСТИГНУТ | {pair}\n"
-        f"Уровень +{config.PARTIAL_TP2_PCT:.0f}% ROE пройден\n"
-        f"Закрыто еще 30% (всего 70%)"
-    )
 
-if pnl_pct >= config.PARTIAL_TP3_PCT and not position.partial_tp3_done:
-    position.partial_tp3_done = True
-    await self.send_telegram_message(
-        f"💎 TP3 +{config.PARTIAL_TP3_PCT:.0f}% ROE | {pair}\n"
-        f"Полная фиксация остатка!"
-    )
-    await self.close_position(position_id)
-    continue
+                # 7. ЧАСТИЧНАЯ ФИКСАЦИЯ
+                if pnl_pct >= config.PARTIAL_TP1_PCT and not position.partial_tp1_done:
+                    position.partial_tp1_done = True
+                    qty_to_close = position.quantity * 0.40  # ЗАКРЫВАЕМ 40%
+                    await self.close_partial_position(position, qty_to_close, current_price)
+                    # СРАЗУ переводим SL в безубыток
+                    position.dynamic_sl_level = 1
+                    await self.apply_dynamic_sl(position, price_change_pct, current_price)
+                    await self.send_telegram_message(
+                        f"💰 ЧАСТИЧНАЯ ФИКСАЦИЯ | {pair}\n"
+                        f"TP1 +{config.PARTIAL_TP1_PCT:.0f}% ROE достигнут\n"
+                        f"Закрыто: 40% позиции | SL в безубыток"
+                    )
 
+                if pnl_pct >= config.PARTIAL_TP2_PCT and not position.partial_tp2_done:
+                    position.partial_tp2_done = True
+                    qty_to_close = position.quantity * 0.30  # ЗАКРЫВАЕМ ЕЩЕ 30%
+                    await self.close_partial_position(position, qty_to_close, current_price)
+                    await self.send_telegram_message(
+                        f"🚀 TP2 ДОСТИГНУТ | {pair}\n"
+                        f"Уровень +{config.PARTIAL_TP2_PCT:.0f}% ROE пройден\n"
+                        f"Закрыто еще 30% (всего 70%)"
+                    )
+
+                if pnl_pct >= config.PARTIAL_TP3_PCT and not position.partial_tp3_done:
+                    position.partial_tp3_done = True
+                    await self.send_telegram_message(
+                        f"💎 TP3 +{config.PARTIAL_TP3_PCT:.0f}% ROE | {pair}\n"
+                        f"Полная фиксация остатка!"
+                    )
+                    await self.close_position(position_id)
+                    continue
 
 
                 # 7. ДИНАМИЧЕСКИЙ SL (передаём price_change_pct — без плеча!)
