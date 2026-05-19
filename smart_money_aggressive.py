@@ -1456,8 +1456,31 @@ class SmartMoneyBot:
                 active_pos = next((p for p in positions_now if abs(float(p.get('contracts', 0) or 0)) > 0), None)
                 
                 if not active_pos:
-                    logger.info(f"Синхронизация: {position.symbol} уже закрыта на бирже. Удаляем из бота.")
-                    await self.close_position(position_id)
+                    # Позиция закрыта на бирже (SL/TP сработал) — чистим БЕЗ торговли
+                    logger.info(f"Синхронизация: {position.symbol} уже закрыта на бирже. Чистим из бота.")
+                    try:
+                        ticker = await self.exchange.fetch_ticker(position.symbol)
+                        exit_price = ticker['last']
+                        if position.side == 'SHORT':
+                            est_pnl = (position.entry_price - exit_price) * position.remaining_quantity
+                        else:
+                            est_pnl = (exit_price - position.entry_price) * position.remaining_quantity
+                        est_pnl += position.realized_pnl_usd
+                        margin = position.amount_usdt
+                        pnl_pct = (est_pnl / margin * 100) if margin > 0 else 0
+                        self.db.update_position(position_id, exit_price, est_pnl, pnl_pct)
+                        self.db.update_daily_statistics(est_pnl, pnl_pct, count_as_trade=True,
+                                                       equity_reference=config.DEPOSIT)
+                        emoji = "✅" if est_pnl >= 0 else "❌"
+                        await self.send_telegram_message(
+                            f"{emoji} СИНХРОНИЗАЦИЯ | {position.symbol.replace('/USDT', '')}\n"
+                            f"Позиция была закрыта на бирже (SL/TP)\n"
+                            f"PnL: {'+' if est_pnl >= 0 else ''}${est_pnl:.2f} ({pnl_pct:+.1f}%)"
+                        )
+                    except Exception as sync_e:
+                        logger.warning(f"Ошибка синхронизации PnL {position.symbol}: {sync_e}")
+                        self.db.update_position(position_id, position.entry_price, 0, 0)
+                    del self.positions[position_id]
                     continue
 
                 ticker = await self.exchange.fetch_ticker(position.symbol)
@@ -2212,10 +2235,30 @@ class SmartMoneyBot:
         self.is_running = True
         await self.update_top_symbols()
 
-        # Восстановление позиций из БД после перезапуска
+        # Восстановление позиций из БД — ТОЛЬКО если реально есть на бирже
         try:
             open_pos_db = self.db.get_open_positions()
+            restored = 0
+            cleaned = 0
             for pos_row in open_pos_db:
+                symbol = pos_row['symbol']
+                # Проверяем на бирже ПЕРЕД добавлением в бота
+                try:
+                    positions_check = await self.exchange.fetch_positions([symbol])
+                    real_pos = next(
+                        (p for p in positions_check if abs(float(p.get('contracts', 0) or 0)) > 0),
+                        None
+                    )
+                except Exception:
+                    real_pos = None
+
+                if not real_pos:
+                    # Позиции нет на бирже — закрываем в БД без торговли
+                    logger.info(f"Очистка: {symbol} нет на бирже, помечаем как CLOSED в БД")
+                    self.db.update_position(pos_row['id'], pos_row['entry_price'], 0, 0, 'CLOSED')
+                    cleaned += 1
+                    continue
+
                 ts_str = pos_row['timestamp']
                 try:
                     if isinstance(ts_str, str):
@@ -2226,14 +2269,15 @@ class SmartMoneyBot:
                     ts = datetime.now(timezone.utc)
                 
                 pos = Position(
-                    id=pos_row['id'], symbol=pos_row['symbol'], side=pos_row['side'],
+                    id=pos_row['id'], symbol=symbol, side=pos_row['side'],
                     entry_price=pos_row['entry_price'], stop_loss=pos_row['stop_loss'],
                     amount_usdt=pos_row['amount_usdt'], leverage=pos_row['leverage'],
                     quantity=pos_row['quantity'], remaining_quantity=pos_row['quantity'],
                     timestamp=ts
                 )
                 self.positions[pos.id] = pos
-            logger.info(f"Восстановлено {len(self.positions)} активных позиций из БД")
+                restored += 1
+            logger.info(f"Восстановлено {restored} позиций | Очищено {cleaned} фантомных")
         except Exception as e:
             logger.error(f"Ошибка при восстановлении позиций: {e}")
 
