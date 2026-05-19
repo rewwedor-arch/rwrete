@@ -79,6 +79,12 @@ async def task_with_log(task_name: str, coro):
 # ============================================================================
 
 @dataclass
+
+
+# === SAFE AGGRESSIVE CONFIG ===
+MAX_CONSECUTIVE_LOSSES = 3
+LOSS_COOLDOWN_MINUTES = 45
+
 class StrategyConfig:
     """Конфигурация стратегии SMART MONEY — ТУРБО РЕЖИМ (Пампы)"""
     # Финансовые параметры
@@ -165,9 +171,7 @@ config = StrategyConfig()
 # ============================================================================
 ALLOW_TRADING = True
 
-# === AGGRESSIVE SMART FILTER ===
-MAX_CONSECUTIVE_LOSSES = 3
-LOSS_COOLDOWN_MINUTES = 45
+
 
 
 async def check_fear_greed_index(bot: 'SmartMoneyBot'):
@@ -206,9 +210,7 @@ async def check_fear_greed_index(bot: 'SmartMoneyBot'):
                             elif value >= 25 and not ALLOW_TRADING:
                                 ALLOW_TRADING = True
 
-# === AGGRESSIVE SMART FILTER ===
-MAX_CONSECUTIVE_LOSSES = 3
-LOSS_COOLDOWN_MINUTES = 45
+
 
                                 msg = (
                                     f"✅ Рынок успокоился.\n"
