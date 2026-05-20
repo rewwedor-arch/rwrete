@@ -2299,10 +2299,20 @@ class SmartMoneyBot:
             asyncio.create_task(task_with_log("trailing_stop", trailing_stop_loop(self)))
         ]
 
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        logger.error(f"Все задачи завершились! Results: {results}")
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            try:
+                task.result()
+            except Exception as e:
+                logger.error(f"Одна из задач упала с ошибкой: {e}")
+        
+        logger.error("Задача завершилась. Отменяем остальные...")
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        
         await asyncio.sleep(0.5)
-        return True
+        return False
 
     async def stop(self):
         logger.info("Остановка бота...")
