@@ -1,4 +1,11 @@
 
+# ===== BLACKLIST =====
+BLACKLIST_SYMBOLS = [
+    "SPACE/USDT",
+    "MON/USDT",
+]
+
+
 # ===== RUNNER MODE =====
 RUNNER_MODE = True
 RUNNER_STEP_PERCENT = 100
@@ -150,7 +157,7 @@ MAX_OPEN_POSITIONS = 3
 USE_ISOLATED_MARGIN = True
 ENABLE_DYNAMIC_SL = True
 ENABLE_TRAILING_PROFIT_LOCK = True
-MOVE_SL_TO_BREAKEVEN_AT = 2.5
+MOVE_SL_TO_BREAKEVEN_AT = 8.5
 MIN_RR_RATIO = 1.4
 
 
@@ -259,7 +266,7 @@ async def task_with_log(task_name: str, coro):
 
 MAX_CONSECUTIVE_LOSSES = 2
 MIN_VOLUME_RATIO = 1.5        # Было 1.0 — слишком много мусорных сигналов
-MIN_ADX = 20                  # Было 10 — входил в боковик без тренда
+MIN_ADX = 28                  # Было 10 — входил в боковик без тренда
 TRADE_COOLDOWN_MINUTES = 1
 LOSS_COOLDOWN_MINUTES = 3
 
@@ -1571,12 +1578,6 @@ class SmartMoneyBot:
             else:
                 actual_tp = float(self.exchange.price_to_precision(
                     position.symbol, position.entry_price * (1 + config.TP3_PCT / 100)))
-
-            try:
-                await self.exchange.cancel_all_orders(position.symbol)
-                await asyncio.sleep(0.3)
-            except Exception:
-                pass
 
             await self.exchange.create_order(
                 symbol=position.symbol, type='STOP_MARKET', side=close_side,
