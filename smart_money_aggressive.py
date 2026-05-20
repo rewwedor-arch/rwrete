@@ -1572,6 +1572,12 @@ class SmartMoneyBot:
                 actual_tp = float(self.exchange.price_to_precision(
                     position.symbol, position.entry_price * (1 + config.TP3_PCT / 100)))
 
+            try:
+                await self.exchange.cancel_all_orders(position.symbol)
+                await asyncio.sleep(0.3)
+            except Exception:
+                pass
+
             await self.exchange.create_order(
                 symbol=position.symbol, type='STOP_MARKET', side=close_side,
                 amount=qty_rounded,
