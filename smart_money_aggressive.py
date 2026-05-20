@@ -1128,6 +1128,12 @@ class SmartMoneyBot:
                     except Exception:
                         continue
 
+            # ── Чистим ВСЕ старые ордера перед открытием (предотвращает -4130 и -4045) ──
+            try:
+                await self.exchange.cancel_all_orders(symbol)
+            except Exception:
+                pass
+
             # Открываем позицию
             try:
                 if direction == 'SHORT':
@@ -1170,29 +1176,61 @@ class SmartMoneyBot:
                     symbol, actual_entry * (1 + config.TAKE_PROFIT_PCT / 100)))
                 close_side = 'SELL'
 
-            # ── ИСПРАВЛЕНИЕ 1: SL реально выставляется на бирже ──
-            try:
-                await self.exchange.cancel_all_orders(symbol) # Чистим старые ордера перед новыми
-                await self.exchange.create_order(
-                    symbol=symbol,
-                    type='STOP_MARKET',
-                    side=close_side,
-                    amount=actual_qty,
-                    params={'stopPrice': actual_sl, 'closePosition': True, 'workingType': 'MARK_PRICE'}
-                )
-                logger.info(f"✅ SL выставлен на бирже: {actual_sl}")
-            except Exception as e:
-                logger.error(f"❌ ОШИБКА SL для {symbol}: {e}. ЭКСТРЕННОЕ ЗАКРЫТИЕ ПОЗИЦИИ!")
+            # ── SL на бирже (с обработкой -4130 "already exists") ──
+            sl_placed = False
+            for sl_attempt in range(3):
+                try:
+                    if sl_attempt > 0:
+                        try:
+                            await self.exchange.cancel_all_orders(symbol)
+                        except Exception:
+                            pass
+                        await asyncio.sleep(0.5)
+                    await self.exchange.create_order(
+                        symbol=symbol,
+                        type='STOP_MARKET',
+                        side=close_side,
+                        amount=actual_qty,
+                        params={'stopPrice': actual_sl, 'closePosition': True, 'workingType': 'MARK_PRICE'}
+                    )
+                    logger.info(f"✅ SL выставлен на бирже: {actual_sl}")
+                    sl_placed = True
+                    break
+                except Exception as e:
+                    err_str = str(e)
+                    if '-4130' in err_str:
+                        # SL/TP уже стоит с closePosition — значит защита есть, продолжаем
+                        logger.info(f"ℹ️ SL уже стоит для {symbol} (closePosition), продолжаем")
+                        sl_placed = True
+                        break
+                    elif '-2021' in err_str:
+                        # "Order would immediately trigger" — SL уже пробит
+                        logger.error(f"❌ SL {symbol} сразу сработает — закрываем позицию")
+                        break
+                    else:
+                        logger.warning(f"⚠️ SL попытка {sl_attempt+1}/3 для {symbol}: {e}")
+
+            if not sl_placed:
+                # Не удалось поставить SL — экстренно закрываем позицию
+                logger.error(f"❌ SL не удалось выставить для {symbol}. Закрываем позицию!")
                 try:
                     if close_side == 'BUY':
                         await self.exchange.create_market_buy_order(symbol, actual_qty, params={'reduceOnly': True})
                     else:
                         await self.exchange.create_market_sell_order(symbol, actual_qty, params={'reduceOnly': True})
                 except Exception as ex:
-                    logger.error(f"Не удалось экстренно закрыть {symbol}: {ex}")
+                    # Если reduceOnly тоже не работает (-4131 PERCENT_PRICE) — пробуем без него
+                    logger.warning(f"reduceOnly не сработал: {ex}, пробуем closePosition")
+                    try:
+                        await self.exchange.create_order(
+                            symbol=symbol, type='MARKET', side=close_side,
+                            amount=actual_qty, params={'reduceOnly': True}
+                        )
+                    except Exception as ex2:
+                        logger.error(f"Не удалось закрыть {symbol} никаким способом: {ex2}")
                 return None
 
-            # ── TP3 на бирже ──
+            # ── TP3 на бирже (с обработкой -4130) ──
             try:
                 await self.exchange.create_order(
                     symbol=symbol,
@@ -1202,7 +1240,11 @@ class SmartMoneyBot:
                     params={'stopPrice': actual_tp, 'closePosition': True, 'workingType': 'MARK_PRICE'}
                 )
             except Exception as e:
-                logger.warning(f"⚠️ TP не выставлен для {symbol}: {e}")
+                err_str = str(e)
+                if '-4130' in err_str:
+                    logger.info(f"ℹ️ TP уже стоит для {symbol}, пропускаем")
+                else:
+                    logger.warning(f"⚠️ TP не выставлен для {symbol}: {e}")
 
             position_id = self.db.add_position(
                 symbol=symbol, side=direction, entry_price=actual_entry,
@@ -2169,71 +2211,101 @@ class SmartMoneyBot:
         logger.error(f"Ошибка Telegram handler: {context.error}")
 
     async def start_telegram_bot(self):
-        try:
-            from telegram.ext import MessageHandler, filters
-            from telegram import BotCommand
-
-            self.app = Application.builder().token(self.telegram_token).build()
-
-            self.app.add_handler(CommandHandler("start", self.cmd_start))
-            self.app.add_handler(CommandHandler("balance", self.cmd_balance))
-            self.app.add_handler(CommandHandler("positions", self.cmd_positions))
-            self.app.add_handler(CommandHandler("signals", self.cmd_signals))
-            self.app.add_handler(CommandHandler("close", self.cmd_close))
-            self.app.add_handler(CommandHandler("close_all", self.cmd_close_all))
-            self.app.add_handler(CommandHandler("start_bot", self.cmd_start_bot))
-            self.app.add_handler(CommandHandler("stop_bot", self.cmd_stop_bot))
-            self.app.add_handler(CommandHandler("emergency", self.cmd_emergency))
-            self.app.add_handler(CommandHandler("daily_report", self.cmd_daily_report))
-            self.app.add_handler(CommandHandler("stats", self.cmd_stats))
-            self.app.add_handler(CommandHandler("stop_trading", self.cmd_stop_trading))
-            # НОВАЯ КОМАНДА: /report
-            self.app.add_handler(CommandHandler("report", self.cmd_hourly_report))
-            self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
-            self.app.add_error_handler(self.error_handler)
-
+        """Telegram polling с автоперезапуском при Conflict (не роняет весь бот)"""
+        while self.is_running:
             try:
-                await self.app.bot.set_my_commands([
-                    BotCommand("start", "Главное меню с кнопками"),
-                    BotCommand("report", "Текущий отчёт за день"),
-                    BotCommand("balance", "Баланс аккаунта"),
-                    BotCommand("positions", "Открытые позиции"),
-                    BotCommand("stats", "Полная статистика"),
-                    BotCommand("signals", "Последние сигналы"),
-                    BotCommand("close", "Закрыть сделку /close BTC"),
-                    BotCommand("close_all", "Закрыть все позиции"),
-                    BotCommand("start_bot", "Включить бота"),
-                    BotCommand("stop_bot", "Выключить бота"),
-                    BotCommand("stop_trading", "Стоп + закрыть убыточные"),
-                    BotCommand("emergency", "Экстренное закрытие всего"),
-                    BotCommand("daily_report", "Дневной отчёт"),
-                ])
-            except Exception as e:
-                logger.warning(f"Не удалось установить меню команд: {e}")
+                from telegram.ext import MessageHandler, filters
+                from telegram import BotCommand
 
-            await self.app.initialize()
-            await self.app.start()
+                self.app = Application.builder().token(self.telegram_token).build()
 
-            if not self.app.updater._running:
+                self.app.add_handler(CommandHandler("start", self.cmd_start))
+                self.app.add_handler(CommandHandler("balance", self.cmd_balance))
+                self.app.add_handler(CommandHandler("positions", self.cmd_positions))
+                self.app.add_handler(CommandHandler("signals", self.cmd_signals))
+                self.app.add_handler(CommandHandler("close", self.cmd_close))
+                self.app.add_handler(CommandHandler("close_all", self.cmd_close_all))
+                self.app.add_handler(CommandHandler("start_bot", self.cmd_start_bot))
+                self.app.add_handler(CommandHandler("stop_bot", self.cmd_stop_bot))
+                self.app.add_handler(CommandHandler("emergency", self.cmd_emergency))
+                self.app.add_handler(CommandHandler("daily_report", self.cmd_daily_report))
+                self.app.add_handler(CommandHandler("stats", self.cmd_stats))
+                self.app.add_handler(CommandHandler("stop_trading", self.cmd_stop_trading))
+                self.app.add_handler(CommandHandler("report", self.cmd_hourly_report))
+                self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
+                self.app.add_error_handler(self.error_handler)
+
+                try:
+                    await self.app.bot.set_my_commands([
+                        BotCommand("start", "Главное меню с кнопками"),
+                        BotCommand("report", "Текущий отчёт за день"),
+                        BotCommand("balance", "Баланс аккаунта"),
+                        BotCommand("positions", "Открытые позиции"),
+                        BotCommand("stats", "Полная статистика"),
+                        BotCommand("signals", "Последние сигналы"),
+                        BotCommand("close", "Закрыть сделку /close BTC"),
+                        BotCommand("close_all", "Закрыть все позиции"),
+                        BotCommand("start_bot", "Включить бота"),
+                        BotCommand("stop_bot", "Выключить бота"),
+                        BotCommand("stop_trading", "Стоп + закрыть убыточные"),
+                        BotCommand("emergency", "Экстренное закрытие всего"),
+                        BotCommand("daily_report", "Дневной отчёт"),
+                    ])
+                except Exception as e:
+                    logger.warning(f"Не удалось установить меню команд: {e}")
+
+                await self.app.initialize()
+                await self.app.start()
+
                 await self.app.updater.start_polling(
                     bootstrap_retries=3,
                     drop_pending_updates=True,
                     allowed_updates=Update.ALL_TYPES
                 )
 
-            logger.info("Telegram polling запущен")
+                logger.info("Telegram polling запущен")
 
-            while self.is_running:
-                await asyncio.sleep(0.5)
+                while self.is_running:
+                    await asyncio.sleep(1)
 
-            if self.app.updater and self.app.updater.running:
-                await self.app.updater.stop()
-            await self.app.stop()
-            await self.app.shutdown()
+                # Чистый shutdown при остановке бота
+                try:
+                    if self.app.updater and self.app.updater.running:
+                        await self.app.updater.stop()
+                    await self.app.stop()
+                    await self.app.shutdown()
+                except Exception:
+                    pass
+                break  # is_running=False — выходим
 
-        except Exception as e:
-            logger.error(f"Ошибка запуска Telegram: {e}")
-            raise
+            except Exception as e:
+                err_str = str(e)
+                # При Conflict (другой экземпляр) — не роняем бота, просто ждём и пробуем снова
+                if 'Conflict' in err_str or 'terminated by other' in err_str:
+                    logger.warning(f"⚠️ Telegram Conflict: другой экземпляр работает. Повтор через 30 сек...")
+                    # Пытаемся корректно остановить текущий app
+                    try:
+                        if self.app:
+                            if self.app.updater and self.app.updater.running:
+                                await self.app.updater.stop()
+                            await self.app.stop()
+                            await self.app.shutdown()
+                    except Exception:
+                        pass
+                    self.app = None
+                    await asyncio.sleep(30)
+                else:
+                    logger.error(f"Ошибка Telegram: {e}. Повтор через 15 сек...")
+                    try:
+                        if self.app:
+                            if self.app.updater and self.app.updater.running:
+                                await self.app.updater.stop()
+                            await self.app.stop()
+                            await self.app.shutdown()
+                    except Exception:
+                        pass
+                    self.app = None
+                    await asyncio.sleep(15)
 
     # ────────────────────────────────────────────────────────────────────────
     # ЗАПУСК
