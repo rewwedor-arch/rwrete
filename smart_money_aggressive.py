@@ -1172,6 +1172,7 @@ class SmartMoneyBot:
 
             # ── ИСПРАВЛЕНИЕ 1: SL реально выставляется на бирже ──
             try:
+                await self.exchange.cancel_all_orders(symbol) # Чистим старые ордера перед новыми
                 await self.exchange.create_order(
                     symbol=symbol,
                     type='STOP_MARKET',
@@ -1181,7 +1182,15 @@ class SmartMoneyBot:
                 )
                 logger.info(f"✅ SL выставлен на бирже: {actual_sl}")
             except Exception as e:
-                logger.warning(f"⚠️ SL не выставлен для {symbol}: {e}")
+                logger.error(f"❌ ОШИБКА SL для {symbol}: {e}. ЭКСТРЕННОЕ ЗАКРЫТИЕ ПОЗИЦИИ!")
+                try:
+                    if close_side == 'BUY':
+                        await self.exchange.create_market_buy_order(symbol, actual_qty, params={'reduceOnly': True})
+                    else:
+                        await self.exchange.create_market_sell_order(symbol, actual_qty, params={'reduceOnly': True})
+                except Exception as ex:
+                    logger.error(f"Не удалось экстренно закрыть {symbol}: {ex}")
+                return None
 
             # ── TP3 на бирже ──
             try:
@@ -1457,6 +1466,11 @@ class SmartMoneyBot:
                 if not active_pos:
                     # Позиция закрыта на бирже (SL/TP сработал) — чистим БЕЗ торговли
                     logger.info(f"Синхронизация: {position.symbol} уже закрыта на бирже. Чистим из бота.")
+                    try:
+                        await self.exchange.cancel_all_orders(position.symbol)
+                    except Exception as cancel_err:
+                        logger.warning(f"Ошибка отмены ордеров при синхронизации {position.symbol}: {cancel_err}")
+                        
                     try:
                         ticker = await self.exchange.fetch_ticker(position.symbol)
                         exit_price = ticker['last']
