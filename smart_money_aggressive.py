@@ -1,4 +1,36 @@
 
+# ===== BINANCE DYNAMIC LEVERAGE =====
+async def get_max_leverage(exchange, symbol):
+    try:
+        markets = exchange.load_markets()
+        market = markets.get(symbol)
+
+        if market and 'limits' in market:
+            leverage_info = market.get('limits', {}).get('leverage', {})
+
+            max_lev = leverage_info.get('max')
+
+            if max_lev:
+                return int(max_lev)
+
+        # fallback через tiers
+        if hasattr(exchange, 'fetch_leverage_tiers'):
+            tiers = await exchange.fetch_leverage_tiers([symbol])
+
+            if tiers and symbol in tiers:
+                first_tier = tiers[symbol][0]
+
+                if 'maxLeverage' in first_tier:
+                    return int(first_tier['maxLeverage'])
+
+        return 20
+
+    except Exception as e:
+        print(f"Max leverage fetch error for {symbol}: {e}")
+        return 20
+
+
+
 # ===== SINGLE INSTANCE PROTECTION =====
 import os
 
@@ -1161,18 +1193,18 @@ class SmartMoneyBot:
                 pass
             actual_leverage = config.LEVERAGE
             try:
-                await self.exchange.set_leverage(actual_leverage, symbol)
+                
+max_allowed_leverage = await get_max_leverage(self.exchange, symbol)
+actual_leverage = min(LEVERAGE, max_allowed_leverage)
+await self.exchange.set_leverage(actual_leverage, symbol)
+logger.info(f"Dynamic leverage for {symbol}: x{actual_leverage}")
+
             except Exception as lev_err:
                 err_str = str(lev_err)
                 if '-2015' in err_str or 'Invalid API-key' in err_str:
                     raise
-                for fallback_lev in [50, 20, 10]:
-                    try:
-                        await self.exchange.set_leverage(fallback_lev, symbol)
-                        actual_leverage = fallback_lev
-                        break
-                    except Exception:
-                        continue
+                # Автоматически подбираем рабочее плечо для любой монеты
+                # dynamic leverage enabled
 
             # ── Чистим ВСЕ старые ордера перед открытием (предотвращает -4130 и -4045) ──
             try:
@@ -1191,15 +1223,31 @@ class SmartMoneyBot:
                 if '-2015' in err_str or 'Invalid API-key' in err_str:
                     raise
                 if '-2027' in err_str or 'Exceeded' in err_str:
-                    new_lev = 20
-                    await self.exchange.set_leverage(new_lev, symbol)
-                    actual_leverage = new_lev
+                    # Если биржа отклонила плечо — уменьшаем автоматически
+                    for new_lev in [20, 10, 5, 3, 2, 1]:
+                        try:
+                            
+max_allowed_leverage = await get_max_leverage(self.exchange, symbol)
+actual_leverage = min(LEVERAGE, max_allowed_leverage)
+await self.exchange.set_leverage(actual_leverage, symbol)
+logger.info(f"Dynamic leverage for {symbol}: x{actual_leverage}")
+
+                            actual_leverage = new_lev
+                            logger.info(f"Emergency leverage fallback for {symbol}: x{new_lev}")
+                            break
+                        except Exception:
+                            continue
                     if direction == 'SHORT':
                         order = await self.exchange.create_market_sell_order(symbol, quantity)
                     else:
                         order = await self.exchange.create_market_buy_order(symbol, quantity)
                 else:
                     raise
+
+            
+            # Финальная защита от invalid leverage
+            if actual_leverage < 1:
+                actual_leverage = 1
 
             actual_entry = float(order['average']) if order.get('average') else entry_price
             actual_qty = float(order['filled']) if order.get('filled') else quantity
