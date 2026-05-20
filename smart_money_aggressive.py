@@ -2,22 +2,27 @@
 # ===== BINANCE DYNAMIC LEVERAGE =====
 async def get_max_leverage(exchange, symbol):
     try:
-        if hasattr(exchange, "fetch_leverage_tiers"):
+        markets = exchange.load_markets()
+        market = markets.get(symbol)
+
+        if market and 'limits' in market:
+            leverage_info = market.get('limits', {}).get('leverage', {})
+
+            max_lev = leverage_info.get('max')
+
+            if max_lev:
+                return int(max_lev)
+
+        # fallback через tiers
+        if hasattr(exchange, 'fetch_leverage_tiers'):
             tiers = await exchange.fetch_leverage_tiers([symbol])
 
-            if tiers and symbol in tiers and len(tiers[symbol]) > 0:
-                tier = tiers[symbol][0]
+            if tiers and symbol in tiers:
+                first_tier = tiers[symbol][0]
 
-                if isinstance(tier, dict):
-                    max_lev = tier.get("maxLeverage")
+                if 'maxLeverage' in first_tier:
+                    return int(first_tier['maxLeverage'])
 
-                    if max_lev:
-                        return int(float(max_lev))
-
-        return 20
-
-    except Exception as e:
-        print(f"Leverage fetch error for {symbol}: {e}")
         return 20
 
     except Exception as e:
@@ -1188,11 +1193,11 @@ class SmartMoneyBot:
                 pass
             actual_leverage = config.LEVERAGE
             try:
-                    max_allowed_leverage = await get_max_leverage(self.exchange, symbol)
-
-                    actual_leverage = min(LEVERAGE, max_allowed_leverage)
-                    await self.exchange.set_leverage(actual_leverage, symbol)
-                    logger.info(f"Dynamic leverage for {symbol}: x{actual_leverage}")
+                
+                max_allowed_leverage = await get_max_leverage(self.exchange, symbol)
+                actual_leverage = min(config.LEVERAGE, max_allowed_leverage)
+                await self.exchange.set_leverage(actual_leverage, symbol)
+                logger.info(f"Dynamic leverage for {symbol}: x{actual_leverage}")
 
             except Exception as lev_err:
                 err_str = str(lev_err)
@@ -1221,12 +1226,11 @@ class SmartMoneyBot:
                     # Если биржа отклонила плечо — уменьшаем автоматически
                     for new_lev in [20, 10, 5, 3, 2, 1]:
                         try:
-                            pass
-                    max_allowed_leverage = await get_max_leverage(self.exchange, symbol)
-
-                    actual_leverage = min(LEVERAGE, max_allowed_leverage)
-                    await self.exchange.set_leverage(actual_leverage, symbol)
-                    logger.info(f"Dynamic leverage for {symbol}: x{actual_leverage}")
+                            
+                            max_allowed_leverage = await get_max_leverage(self.exchange, symbol)
+                            actual_leverage = min(config.LEVERAGE, max_allowed_leverage)
+                            await self.exchange.set_leverage(actual_leverage, symbol)
+                            logger.info(f"Dynamic leverage for {symbol}: x{actual_leverage}")
 
                             actual_leverage = new_lev
                             logger.info(f"Emergency leverage fallback for {symbol}: x{new_lev}")
