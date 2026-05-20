@@ -1221,6 +1221,7 @@ class SmartMoneyBot:
                     # Если биржа отклонила плечо — уменьшаем автоматически
                     for new_lev in [20, 10, 5, 3, 2, 1]:
                         try:
+                            pass
                     max_allowed_leverage = await get_max_leverage(self.exchange, symbol)
 
                     actual_leverage = min(LEVERAGE, max_allowed_leverage)
