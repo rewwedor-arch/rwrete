@@ -1,4 +1,10 @@
 
+# ===== RUNNER MODE =====
+RUNNER_MODE = True
+RUNNER_STEP_PERCENT = 100
+RUNNER_CLOSE_PERCENT = 10
+
+
 # ===== BINANCE DYNAMIC LEVERAGE =====
 async def get_max_leverage(exchange, symbol):
     try:
@@ -2781,3 +2787,15 @@ async def controlled_hourly_report():
         print(f"✅ Hourly report sent for hour {current_hour}")
     except Exception as e:
         print(f"❌ Hourly report failed: {e}")
+
+# ===== TP3 RUNNER LOGIC =====
+async def runner_take_profit(current_roe, last_runner_tp=0):
+    if not RUNNER_MODE:
+        return 0
+
+    target = last_runner_tp + RUNNER_STEP_PERCENT
+
+    if current_roe >= target:
+        return RUNNER_CLOSE_PERCENT
+
+    return 0
