@@ -1,4 +1,44 @@
 
+# ===== SINGLE INSTANCE PROTECTION =====
+import os
+
+LOCK_FILE = "/tmp/smart_money_bot.lock"
+
+try:
+    if os.path.exists(LOCK_FILE):
+        print("Another bot instance already running")
+    else:
+        with open(LOCK_FILE, "w") as f:
+            f.write("running")
+except Exception:
+    pass
+
+
+
+# ===== SAFE LEVERAGE FIX =====
+def get_safe_leverage(symbol, requested_leverage=75):
+    try:
+        limits = {
+            "BTC": 125,
+            "ETH": 100,
+            "BNB": 75,
+            "SOL": 50,
+            "XRP": 75,
+            "ZEC": 50,
+            "MON": 10,
+        }
+
+        for coin, max_lev in limits.items():
+            if coin in symbol.upper():
+                return min(requested_leverage, max_lev)
+
+        return min(requested_leverage, 20)
+
+    except Exception:
+        return 20
+
+
+
 # ===== REPORT COOLDOWN =====
 LAST_HOURLY_REPORT = 0
 HOURLY_REPORT_INTERVAL = 3600
