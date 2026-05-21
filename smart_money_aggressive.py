@@ -284,7 +284,7 @@ class StrategyConfig:
     LEVERAGE: int = 75  # Максимальное плечо для агрессивного разгона
 
     # === SL/TP ДЛЯ СКАЛЬПИНГА x75 ===
-    STOP_LOSS_PCT: float = 0.4       # -30% ROE: потеря $3 с $10 маржи
+    STOP_LOSS_PCT: float = 0.2       # -15% ROE: потеря ~$1.5 с $10 маржи
     TAKE_PROFIT_PCT: float = 0.8     # TP1 +60% ROE: прибыль $6 с $10
     TAKE_PROFIT: float = 0.8
     TP2_PCT: float = 1.5             # TP2 +112% ROE
@@ -532,7 +532,7 @@ class Database:
 
         conn.commit()
         try:
-            ref = float(os.getenv('DEPOSIT', '140') or '140')
+            ref = float(os.getenv('DEPOSIT', '50') or '140')
             if ref > 0:
                 cursor.execute(
                     'UPDATE statistics SET total_pnl_pct = (total_pnl * 100.0 / ?) WHERE ABS(total_pnl) > 1e-9 OR total_trades > 0',
@@ -602,7 +602,7 @@ class Database:
         conn.commit()
         conn.close()
 
-    def update_daily_statistics(self, pnl, pnl_pct, count_as_trade=True, equity_reference=140.0):
+    def update_daily_statistics(self, pnl, pnl_pct, count_as_trade=True, equity_reference=config.DEPOSIT):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
@@ -1458,12 +1458,23 @@ class SmartMoneyBot:
                     exit_price = position.entry_price
             exit_price = float(exit_price)
 
+            # FIX: считаем PnL от реальной маржи, без двойного учёта плеча
             if position.side == 'SHORT':
-                leg_pnl = (position.entry_price - exit_price) * qty_close
+                price_change_pct = ((position.entry_price - exit_price) / position.entry_price) * 100
             else:
-                leg_pnl = (exit_price - position.entry_price) * qty_close
+                price_change_pct = ((exit_price - position.entry_price) / position.entry_price) * 100
+
+            # Реальный PnL по марже
+            leg_pnl = position.amount_usdt * (price_change_pct / 100.0) * position.leverage
+
+            # Пропорционально частичному закрытию
+            qty_ratio = qty_close / position.quantity if position.quantity > 0 else 1.0
+            leg_pnl *= qty_ratio
+
             total_pnl = position.realized_pnl_usd + leg_pnl
             margin = position.amount_usdt
+
+            # ROE отдельно от абсолютного PnL
             pnl_pct = (total_pnl / margin) * 100 if margin > 0 else 0.0
 
             self.db.update_position(position_id, exit_price, total_pnl, pnl_pct)
@@ -1661,10 +1672,12 @@ class SmartMoneyBot:
                     price_change_pct = ((current_price - position.entry_price) / position.entry_price) * 100
                 pnl_pct = price_change_pct * position.leverage
 
-                if position.side == 'SHORT':
-                    pnl_usd = position.realized_pnl_usd + (position.entry_price - current_price) * position.remaining_quantity
-                else:
-                    pnl_usd = position.realized_pnl_usd + (current_price - position.entry_price) * position.remaining_quantity
+                # FIX: реальный PnL по марже без завышения через номинал
+                pnl_usd = (
+                    position.amount_usdt
+                    * (price_change_pct / 100.0)
+                    * position.leverage
+                ) + position.realized_pnl_usd
 
                 if pnl_pct > position.peak_pnl:
                     position.peak_pnl = pnl_pct
