@@ -186,7 +186,7 @@ ENABLE_MACD_CONFIRMATION = True
 ENABLE_RSI_FILTER = True
 ENABLE_ADX_FILTER = True
 
-MIN_SIGNAL_SCORE = 10
+MIN_SIGNAL_SCORE = 20
 EMA_PERIOD = 200
 RSI_LONG_MIN = 62
 ADX_MIN = 28
@@ -284,7 +284,7 @@ class StrategyConfig:
     LEVERAGE: int = 75  # Максимальное плечо для агрессивного разгона
 
     # === SL/TP ДЛЯ СКАЛЬПИНГА x75 ===
-    STOP_LOSS_PCT: float = 0.2       # -15% ROE: потеря ~$1.5 с $10 маржи
+    STOP_LOSS_PCT: float = 0.35       # -15% ROE: потеря ~$1.5 с $10 маржи
     TAKE_PROFIT_PCT: float = 0.8     # TP1 +60% ROE: прибыль $6 с $10
     TAKE_PROFIT: float = 0.8
     TP2_PCT: float = 1.5             # TP2 +112% ROE
