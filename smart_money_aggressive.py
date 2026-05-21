@@ -1205,245 +1205,245 @@ class SmartMoneyBot:
         except Exception:
             return price
 
-async def open_position(self, symbol, entry_price, smc_result) -> Optional[Position]:
-        global ALLOW_TRADING
-        if not ALLOW_TRADING:
-            logger.info(f"Сигнал {symbol} пойман, торговля приостановлена")
-            return None
-        try:
-            direction = smc_result.get('direction', 'LONG')
-            market_info = self.exchange.market(symbol)
-            min_notional = float(market_info.get('limits', {}).get('cost', {}).get('min', 5))
-
-            real_score = smc_result.get('score', 5)
-            if isinstance(real_score, str):
-                real_score = 7  # паттерн-матч = сильный сигнал
-            quantity, margin, actual_amount = await self.calculate_position_size(entry_price, score=real_score)
-            if quantity == 0:
+    async def open_position(self, symbol, entry_price, smc_result) -> Optional[Position]:
+            global ALLOW_TRADING
+            if not ALLOW_TRADING:
+                logger.info(f"Сигнал {symbol} пойман, торговля приостановлена")
                 return None
+            try:
+                direction = smc_result.get('direction', 'LONG')
+                market_info = self.exchange.market(symbol)
+                min_notional = float(market_info.get('limits', {}).get('cost', {}).get('min', 5))
 
-            quantity = float(self.exchange.amount_to_precision(symbol, quantity))
-            notional = quantity * entry_price
-            if notional < min_notional:
-                quantity = float(self.exchange.amount_to_precision(symbol, min_notional / entry_price * 1.05))
-                notional = quantity * entry_price
-                if notional < min_notional:
+                real_score = smc_result.get('score', 5)
+                if isinstance(real_score, str):
+                    real_score = 7  # паттерн-матч = сильный сигнал
+                quantity, margin, actual_amount = await self.calculate_position_size(entry_price, score=real_score)
+                if quantity == 0:
                     return None
 
-            dir_emoji = '🟢 LONG' if direction == 'LONG' else '🔴 SHORT'
-            logger.info(f"Открытие {dir_emoji} {symbol}: qty={quantity}, notional=${notional:.2f}")
+                quantity = float(self.exchange.amount_to_precision(symbol, quantity))
+                notional = quantity * entry_price
+                if notional < min_notional:
+                    quantity = float(self.exchange.amount_to_precision(symbol, min_notional / entry_price * 1.05))
+                    notional = quantity * entry_price
+                    if notional < min_notional:
+                        return None
 
-            # Кросс-маржа и плечо
-            try:
-                await self.exchange.set_margin_mode('cross', symbol)
-            except Exception:
-                pass
-            actual_leverage = config.LEVERAGE
-            try:
+                dir_emoji = '🟢 LONG' if direction == 'LONG' else '🔴 SHORT'
+                logger.info(f"Открытие {dir_emoji} {symbol}: qty={quantity}, notional=${notional:.2f}")
+
+                # Кросс-маржа и плечо
+                try:
+                    await self.exchange.set_margin_mode('cross', symbol)
+                except Exception:
+                    pass
+                actual_leverage = config.LEVERAGE
+                try:
                 
-                max_allowed_leverage = await get_max_leverage(self.exchange, symbol)
-                actual_leverage = min(config.LEVERAGE, max_allowed_leverage)
-                await self.exchange.set_leverage(actual_leverage, symbol)
-                logger.info(f"Dynamic leverage for {symbol}: x{actual_leverage}")
+                    max_allowed_leverage = await get_max_leverage(self.exchange, symbol)
+                    actual_leverage = min(config.LEVERAGE, max_allowed_leverage)
+                    await self.exchange.set_leverage(actual_leverage, symbol)
+                    logger.info(f"Dynamic leverage for {symbol}: x{actual_leverage}")
 
-            except Exception as lev_err:
-                err_str = str(lev_err)
-                if '-2015' in err_str or 'Invalid API-key' in err_str:
-                    raise
-                # Автоматически подбираем рабочее плечо для любой монеты
-                # dynamic leverage enabled
+                except Exception as lev_err:
+                    err_str = str(lev_err)
+                    if '-2015' in err_str or 'Invalid API-key' in err_str:
+                        raise
+                    # Автоматически подбираем рабочее плечо для любой монеты
+                    # dynamic leverage enabled
 
-            # ── Чистим ВСЕ старые ордера перед открытием (предотвращает -4130 и -4045) ──
-            try:
-                await self.exchange.cancel_all_orders(symbol)
-            except Exception:
-                pass
+                # ── Чистим ВСЕ старые ордера перед открытием (предотвращает -4130 и -4045) ──
+                try:
+                    await self.exchange.cancel_all_orders(symbol)
+                except Exception:
+                    pass
 
-            # Открываем позицию
-            try:
-                if direction == 'SHORT':
-                    order = await self.exchange.create_market_sell_order(symbol, quantity)
-                else:
-                    order = await self.exchange.create_market_buy_order(symbol, quantity)
-            except Exception as e:
-                err_str = str(e)
-                if '-2015' in err_str or 'Invalid API-key' in err_str:
-                    raise
-                if '-2027' in err_str or 'Exceeded' in err_str:
-                    # Если биржа отклонила плечо — уменьшаем автоматически
-                    for new_lev in [20, 10, 5, 3, 2, 1]:
-                        try:
-                            
-                            max_allowed_leverage = await get_max_leverage(self.exchange, symbol)
-                            actual_leverage = min(config.LEVERAGE, max_allowed_leverage)
-                            await self.exchange.set_leverage(actual_leverage, symbol)
-                            logger.info(f"Dynamic leverage for {symbol}: x{actual_leverage}")
-
-                            actual_leverage = new_lev
-                            logger.info(f"Emergency leverage fallback for {symbol}: x{new_lev}")
-                            break
-                        except Exception:
-                            continue
+                # Открываем позицию
+                try:
                     if direction == 'SHORT':
                         order = await self.exchange.create_market_sell_order(symbol, quantity)
                     else:
                         order = await self.exchange.create_market_buy_order(symbol, quantity)
-                else:
-                    raise
+                except Exception as e:
+                    err_str = str(e)
+                    if '-2015' in err_str or 'Invalid API-key' in err_str:
+                        raise
+                    if '-2027' in err_str or 'Exceeded' in err_str:
+                        # Если биржа отклонила плечо — уменьшаем автоматически
+                        for new_lev in [20, 10, 5, 3, 2, 1]:
+                            try:
+                            
+                                max_allowed_leverage = await get_max_leverage(self.exchange, symbol)
+                                actual_leverage = min(config.LEVERAGE, max_allowed_leverage)
+                                await self.exchange.set_leverage(actual_leverage, symbol)
+                                logger.info(f"Dynamic leverage for {symbol}: x{actual_leverage}")
+
+                                actual_leverage = new_lev
+                                logger.info(f"Emergency leverage fallback for {symbol}: x{new_lev}")
+                                break
+                            except Exception:
+                                continue
+                        if direction == 'SHORT':
+                            order = await self.exchange.create_market_sell_order(symbol, quantity)
+                        else:
+                            order = await self.exchange.create_market_buy_order(symbol, quantity)
+                    else:
+                        raise
 
             
-            # Финальная защита от invalid leverage
-            if actual_leverage < 1:
-                actual_leverage = 1
+                # Финальная защита от invalid leverage
+                if actual_leverage < 1:
+                    actual_leverage = 1
 
-            actual_entry = float(order['average']) if order.get('average') else entry_price
-            actual_qty = float(order['filled']) if order.get('filled') else quantity
+                actual_entry = float(order['average']) if order.get('average') else entry_price
+                actual_qty = float(order['filled']) if order.get('filled') else quantity
 
-            # SL и TP по направлению
-            if direction == 'SHORT':
-                actual_sl = float(self.exchange.price_to_precision(
-                    symbol, actual_entry * (1 + config.STOP_LOSS_PCT / 100)))
-                actual_tp = float(self.exchange.price_to_precision(
-                    symbol, actual_entry * (1 - config.TP3_PCT / 100)))
-                tp1_price = float(self.exchange.price_to_precision(
-                    symbol, actual_entry * (1 - config.TAKE_PROFIT_PCT / 100)))
-                close_side = 'BUY'
-            else:
-                actual_sl = float(self.exchange.price_to_precision(
-                    symbol, actual_entry * (1 - config.STOP_LOSS_PCT / 100)))
-                actual_tp = float(self.exchange.price_to_precision(
-                    symbol, actual_entry * (1 + config.TP3_PCT / 100)))
-                tp1_price = float(self.exchange.price_to_precision(
-                    symbol, actual_entry * (1 + config.TAKE_PROFIT_PCT / 100)))
-                close_side = 'SELL'
+                # SL и TP по направлению
+                if direction == 'SHORT':
+                    actual_sl = float(self.exchange.price_to_precision(
+                        symbol, actual_entry * (1 + config.STOP_LOSS_PCT / 100)))
+                    actual_tp = float(self.exchange.price_to_precision(
+                        symbol, actual_entry * (1 - config.TP3_PCT / 100)))
+                    tp1_price = float(self.exchange.price_to_precision(
+                        symbol, actual_entry * (1 - config.TAKE_PROFIT_PCT / 100)))
+                    close_side = 'BUY'
+                else:
+                    actual_sl = float(self.exchange.price_to_precision(
+                        symbol, actual_entry * (1 - config.STOP_LOSS_PCT / 100)))
+                    actual_tp = float(self.exchange.price_to_precision(
+                        symbol, actual_entry * (1 + config.TP3_PCT / 100)))
+                    tp1_price = float(self.exchange.price_to_precision(
+                        symbol, actual_entry * (1 + config.TAKE_PROFIT_PCT / 100)))
+                    close_side = 'SELL'
 
-            # ── SL на бирже (с обработкой -4130 "already exists") ──
-            sl_placed = False
-            for sl_attempt in range(3):
-                try:
-                    if sl_attempt > 0:
+                # ── SL на бирже (с обработкой -4130 "already exists") ──
+                sl_placed = False
+                for sl_attempt in range(3):
+                    try:
+                        if sl_attempt > 0:
+                            try:
+                                await self.exchange.cancel_all_orders(symbol)
+                            except Exception:
+                                pass
+                            await asyncio.sleep(0.5)
+                        await self.exchange.create_order(
+                            symbol=symbol,
+                            type='STOP_MARKET',
+                            side=close_side,
+                            amount=actual_qty,
+                            params={'stopPrice': actual_sl, 'closePosition': True, 'workingType': 'MARK_PRICE'}
+                        )
+                        logger.info(f"✅ SL выставлен на бирже: {actual_sl}")
+                        sl_placed = True
+                        break
+                    except Exception as e:
+                        err_str = str(e)
+                        if '-4130' in err_str:
+                            # SL/TP уже стоит с closePosition — значит защита есть, продолжаем
+                            logger.info(f"ℹ️ SL уже стоит для {symbol} (closePosition), продолжаем")
+                            sl_placed = True
+                            break
+                        elif '-2021' in err_str:
+                            # "Order would immediately trigger" — SL уже пробит
+                            logger.error(f"❌ SL {symbol} сразу сработает — закрываем позицию")
+                            break
+                        else:
+                            logger.warning(f"⚠️ SL попытка {sl_attempt+1}/3 для {symbol}: {e}")
+
+                if not sl_placed:
+                    # Не удалось поставить SL — экстренно закрываем позицию
+                    logger.error(f"❌ SL не удалось выставить для {symbol}. Закрываем позицию!")
+                    try:
+                        if close_side == 'BUY':
+                            await self.exchange.create_market_buy_order(symbol, actual_qty, params={'reduceOnly': True})
+                        else:
+                            await self.exchange.create_market_sell_order(symbol, actual_qty, params={'reduceOnly': True})
+                    except Exception as ex:
+                        # Если reduceOnly тоже не работает (-4131 PERCENT_PRICE) — пробуем без него
+                        logger.warning(f"reduceOnly не сработал: {ex}, пробуем closePosition")
                         try:
-                            await self.exchange.cancel_all_orders(symbol)
-                        except Exception:
-                            pass
-                        await asyncio.sleep(0.5)
+                            await self.exchange.create_order(
+                                symbol=symbol, type='MARKET', side=close_side,
+                                amount=actual_qty, params={'reduceOnly': True}
+                            )
+                        except Exception as ex2:
+                            logger.error(f"Не удалось закрыть {symbol} никаким способом: {ex2}")
+                    return None
+
+                # ── TP3 на бирже (с обработкой -4130) ──
+                try:
                     await self.exchange.create_order(
                         symbol=symbol,
-                        type='STOP_MARKET',
+                        type='TAKE_PROFIT_MARKET',
                         side=close_side,
                         amount=actual_qty,
-                        params={'stopPrice': actual_sl, 'closePosition': True, 'workingType': 'MARK_PRICE'}
+                        params={'stopPrice': actual_tp, 'closePosition': True, 'workingType': 'MARK_PRICE'}
                     )
-                    logger.info(f"✅ SL выставлен на бирже: {actual_sl}")
-                    sl_placed = True
-                    break
                 except Exception as e:
                     err_str = str(e)
                     if '-4130' in err_str:
-                        # SL/TP уже стоит с closePosition — значит защита есть, продолжаем
-                        logger.info(f"ℹ️ SL уже стоит для {symbol} (closePosition), продолжаем")
-                        sl_placed = True
-                        break
-                    elif '-2021' in err_str:
-                        # "Order would immediately trigger" — SL уже пробит
-                        logger.error(f"❌ SL {symbol} сразу сработает — закрываем позицию")
-                        break
+                        logger.info(f"ℹ️ TP уже стоит для {symbol}, пропускаем")
                     else:
-                        logger.warning(f"⚠️ SL попытка {sl_attempt+1}/3 для {symbol}: {e}")
+                        logger.warning(f"⚠️ TP не выставлен для {symbol}: {e}")
 
-            if not sl_placed:
-                # Не удалось поставить SL — экстренно закрываем позицию
-                logger.error(f"❌ SL не удалось выставить для {symbol}. Закрываем позицию!")
-                try:
-                    if close_side == 'BUY':
-                        await self.exchange.create_market_buy_order(symbol, actual_qty, params={'reduceOnly': True})
-                    else:
-                        await self.exchange.create_market_sell_order(symbol, actual_qty, params={'reduceOnly': True})
-                except Exception as ex:
-                    # Если reduceOnly тоже не работает (-4131 PERCENT_PRICE) — пробуем без него
-                    logger.warning(f"reduceOnly не сработал: {ex}, пробуем closePosition")
-                    try:
-                        await self.exchange.create_order(
-                            symbol=symbol, type='MARKET', side=close_side,
-                            amount=actual_qty, params={'reduceOnly': True}
-                        )
-                    except Exception as ex2:
-                        logger.error(f"Не удалось закрыть {symbol} никаким способом: {ex2}")
+                position_id = self.db.add_position(
+                    symbol=symbol, side=direction, entry_price=actual_entry,
+                    stop_loss=actual_sl, take_profit=tp1_price,
+                    amount_usdt=margin, leverage=actual_leverage,
+                    quantity=actual_qty, smc_score=str(smc_result['score']),
+                    bos_info=smc_result['bos'], fvg_detected=smc_result['fvg'],
+                    rsi_value=smc_result['rsi'], adx_value=smc_result['adx']
+                )
+
+                position = Position(
+                    id=position_id, symbol=symbol, side=direction,
+                    entry_price=actual_entry, stop_loss=actual_sl,
+                    amount_usdt=margin, leverage=actual_leverage,
+                    quantity=actual_qty, remaining_quantity=actual_qty,
+                    timestamp=datetime.now(timezone.utc), realized_pnl_usd=0.0,
+                )
+                self.positions[position_id] = position
+
+                raw_score = smc_result['score']
+                score = 7 if isinstance(raw_score, str) else raw_score
+                quality = "★★★ СИЛЬНЫЙ" if score >= 6 else ("★★☆ ХОРОШИЙ" if score >= 5 else "★☆☆ СРЕДНИЙ")
+                rr = config.TP3_PCT / config.STOP_LOSS_PCT if config.STOP_LOSS_PCT > 0 else 0
+
+                message = (
+                    f"✅ ПОЗИЦИЯ ОТКРЫТА\n"
+                    f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
+                    f"{dir_emoji} | #{symbol.replace('/', '')}\n"
+                    f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n\n"
+                    f"🛒 Вход:    {actual_entry:.5f}\n"
+                    f"💰 Вложено: ${margin:.2f}\n"
+                    f"🎯 TP1:    {tp1_price:.5f}\n"
+                    f"🔴 Стоп:   {actual_sl:.5f}\n"
+                    f"📐 RR: 1:{rr:.1f} | Плечо: x{actual_leverage}\n\n"
+                    f"📊 {quality}\n"
+                    f"  Индикаторы: {', '.join(smc_result['indicators'].keys())}\n"
+                    f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
+                    f"SMART MONEY 1 BOT"
+                )
+                await self.send_telegram_message(message)
+
+                signal_id = self.db.add_signal(
+                    symbol=symbol, signal_type=direction, entry_price=actual_entry,
+                    smc_score=smc_result['score'], indicators=smc_result['indicators']
+                )
+                self.db.mark_signal_executed(signal_id)
+                self.signals_today += 1
+                logger.info(f"Позиция открыта: {direction} {symbol} @ {actual_entry}")
+                return position
+
+            except Exception as e:
+                logger.error(f"Ошибка открытия позиции {symbol}: {e}")
+                await self.send_telegram_message(f"❌ Ошибка открытия {symbol}: {e}")
                 return None
 
-            # ── TP3 на бирже (с обработкой -4130) ──
-            try:
-                await self.exchange.create_order(
-                    symbol=symbol,
-                    type='TAKE_PROFIT_MARKET',
-                    side=close_side,
-                    amount=actual_qty,
-                    params={'stopPrice': actual_tp, 'closePosition': True, 'workingType': 'MARK_PRICE'}
-                )
-            except Exception as e:
-                err_str = str(e)
-                if '-4130' in err_str:
-                    logger.info(f"ℹ️ TP уже стоит для {symbol}, пропускаем")
-                else:
-                    logger.warning(f"⚠️ TP не выставлен для {symbol}: {e}")
-
-            position_id = self.db.add_position(
-                symbol=symbol, side=direction, entry_price=actual_entry,
-                stop_loss=actual_sl, take_profit=tp1_price,
-                amount_usdt=margin, leverage=actual_leverage,
-                quantity=actual_qty, smc_score=str(smc_result['score']),
-                bos_info=smc_result['bos'], fvg_detected=smc_result['fvg'],
-                rsi_value=smc_result['rsi'], adx_value=smc_result['adx']
-            )
-
-            position = Position(
-                id=position_id, symbol=symbol, side=direction,
-                entry_price=actual_entry, stop_loss=actual_sl,
-                amount_usdt=margin, leverage=actual_leverage,
-                quantity=actual_qty, remaining_quantity=actual_qty,
-                timestamp=datetime.now(timezone.utc), realized_pnl_usd=0.0,
-            )
-            self.positions[position_id] = position
-
-            raw_score = smc_result['score']
-            score = 7 if isinstance(raw_score, str) else raw_score
-            quality = "★★★ СИЛЬНЫЙ" if score >= 6 else ("★★☆ ХОРОШИЙ" if score >= 5 else "★☆☆ СРЕДНИЙ")
-            rr = config.TP3_PCT / config.STOP_LOSS_PCT if config.STOP_LOSS_PCT > 0 else 0
-
-            message = (
-                f"✅ ПОЗИЦИЯ ОТКРЫТА\n"
-                f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
-                f"{dir_emoji} | #{symbol.replace('/', '')}\n"
-                f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n\n"
-                f"🛒 Вход:    {actual_entry:.5f}\n"
-                f"💰 Вложено: ${margin:.2f}\n"
-                f"🎯 TP1:    {tp1_price:.5f}\n"
-                f"🔴 Стоп:   {actual_sl:.5f}\n"
-                f"📐 RR: 1:{rr:.1f} | Плечо: x{actual_leverage}\n\n"
-                f"📊 {quality}\n"
-                f"  Индикаторы: {', '.join(smc_result['indicators'].keys())}\n"
-                f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
-                f"SMART MONEY 1 BOT"
-            )
-            await self.send_telegram_message(message)
-
-            signal_id = self.db.add_signal(
-                symbol=symbol, signal_type=direction, entry_price=actual_entry,
-                smc_score=smc_result['score'], indicators=smc_result['indicators']
-            )
-            self.db.mark_signal_executed(signal_id)
-            self.signals_today += 1
-            logger.info(f"Позиция открыта: {direction} {symbol} @ {actual_entry}")
-            return position
-
-        except Exception as e:
-            logger.error(f"Ошибка открытия позиции {symbol}: {e}")
-            await self.send_telegram_message(f"❌ Ошибка открытия {symbol}: {e}")
-            return None
-
-    # ────────────────────────────────────────────────────────────────────────
-    # ЗАКРЫТИЕ ПОЗИЦИИ
-    # ────────────────────────────────────────────────────────────────────────
+        # ────────────────────────────────────────────────────────────────────────
+        # ЗАКРЫТИЕ ПОЗИЦИИ
+        # ────────────────────────────────────────────────────────────────────────
 
     async def close_position(self, position_id, emergency=False) -> bool:
         try:
