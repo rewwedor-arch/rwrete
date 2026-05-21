@@ -99,7 +99,7 @@ ENABLE_SESSION_FILTER = True
 
 MIN_ADX = 28
 MIN_VOLUME_RATIO = 2.0
-MIN_RR_RATIO = 2.0
+MIN_RR_RATIO = 2.5
 MAX_OPEN_POSITIONS = 10
 
 def institutional_filter(
@@ -160,12 +160,12 @@ LAST_LOSS_TIME = 0
 LOSS_COOLDOWN_SECONDS = 1800
 
 # ===== HIGH LEVERAGE PROTECTION =====
-MAX_OPEN_POSITIONS = 3
+MAX_OPEN_POSITIONS = 10
 USE_ISOLATED_MARGIN = True
 ENABLE_DYNAMIC_SL = True
 ENABLE_TRAILING_PROFIT_LOCK = True
 MOVE_SL_TO_BREAKEVEN_AT = 8.5
-MIN_RR_RATIO = 2.0
+MIN_RR_RATIO = 2.5
 
 
 # ===== SAFE RISK MANAGEMENT =====
@@ -1532,10 +1532,23 @@ class SmartMoneyBot:
             try:
                 if position.side == 'SHORT':
                     await self.exchange.create_market_buy_order(position.symbol, qty_to_close, params={'reduceOnly': True})
-                    chunk_pnl = (position.entry_price - current_price) * qty_to_close
                 else:
                     await self.exchange.create_market_sell_order(position.symbol, qty_to_close, params={'reduceOnly': True})
-                    chunk_pnl = (current_price - position.entry_price) * qty_to_close
+
+                # REAL partial pnl from margin, without leverage double counting
+                if position.side == 'SHORT':
+                    price_change_pct = ((position.entry_price - current_price) / position.entry_price) * 100
+                else:
+                    price_change_pct = ((current_price - position.entry_price) / position.entry_price) * 100
+
+                qty_ratio = qty_to_close / position.quantity if position.quantity > 0 else 1.0
+
+                chunk_pnl = (
+                    position.amount_usdt
+                    * (price_change_pct / 100.0)
+                    * position.leverage
+                    * qty_ratio
+                )
             except Exception as e:
                 err_str = str(e)
                 if 'ReduceOnly' in err_str or '-2022' in err_str or 'reduce-only' in err_str.lower() or 'not found' in err_str.lower() or 'position is zero' in err_str.lower() or 'No need to change position' in err_str:
@@ -1749,7 +1762,7 @@ class SmartMoneyBot:
                         logger.warning(f"Ошибка быстрого переворота {pair}: {e}")
 
                 # Анализ тренда для убыточных позиций (с учётом направления)
-                if price_change_pct <= -0.4 and position.peak_pnl < 15.0:
+                if price_change_pct <= -0.7 and position.peak_pnl < 15.0:
                     try:
                         ohlcv_5m = await self.smc_analyzer.get_ohlcv(position.symbol, '5m', limit=20)
                         if ohlcv_5m and len(ohlcv_5m) >= 10:
