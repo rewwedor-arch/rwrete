@@ -100,7 +100,7 @@ ENABLE_SESSION_FILTER = True
 MIN_ADX = 28
 MIN_VOLUME_RATIO = 2.0
 MIN_RR_RATIO = 2.5
-MAX_OPEN_POSITIONS = 10
+MAX_OPEN_POSITIONS = 999
 
 def institutional_filter(
     adx,
@@ -160,7 +160,7 @@ LAST_LOSS_TIME = 0
 LOSS_COOLDOWN_SECONDS = 1800
 
 # ===== HIGH LEVERAGE PROTECTION =====
-MAX_OPEN_POSITIONS = 10
+MAX_OPEN_POSITIONS = 999
 USE_ISOLATED_MARGIN = True
 ENABLE_DYNAMIC_SL = True
 ENABLE_TRAILING_PROFIT_LOCK = True
@@ -366,7 +366,21 @@ async def check_fear_greed_index(bot: 'SmartMoneyBot'):
                                     f"✅ Рынок успокоился.\nFear & Greed: {value} ({classification})\nТорговля возобновлена."
                                 )
         except Exception as e:
-            logger.error(f"Ошибка Fear & Greed: {e}")
+            err = str(e)
+
+            # Binance PERCENT_PRICE filter workaround
+            if "-4131" in err or "PERCENT_PRICE" in err:
+                try:
+                    logger.warning("Retrying as pure market order due to PERCENT_PRICE filter")
+                    if side.upper() == "LONG":
+                        order = await self.exchange.create_market_buy_order(symbol, quantity)
+                    else:
+                        order = await self.exchange.create_market_sell_order(symbol, quantity)
+                    return order
+                except Exception as retry_error:
+                    logger.error(f"Market retry failed: {retry_error}")
+
+            logger.error(f"Order error: {e}")
         await asyncio.sleep(14400)
 
 
@@ -1178,7 +1192,20 @@ class SmartMoneyBot:
     # ОТКРЫТИЕ ПОЗИЦИИ — ИСПРАВЛЕН SL
     # ────────────────────────────────────────────────────────────────────────
 
-    async def open_position(self, symbol, entry_price, smc_result) -> Optional[Position]:
+    
+    def _normalize_order_price(self, symbol, price, side):
+        """
+        Binance futures PERCENT_PRICE protection fix.
+        Keeps limit prices inside allowed deviation bands.
+        """
+        try:
+            if side.upper() == "BUY":
+                return round(price * 0.999, 6)
+            return round(price * 1.001, 6)
+        except Exception:
+            return price
+
+async def open_position(self, symbol, entry_price, smc_result) -> Optional[Position]:
         global ALLOW_TRADING
         if not ALLOW_TRADING:
             logger.info(f"Сигнал {symbol} пойман, торговля приостановлена")
