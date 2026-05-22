@@ -1,8 +1,18 @@
 
+
+# ===== EXTRA MON PROTECTION =====
+def is_blacklisted_symbol(symbol):
+    s = symbol.upper()
+    return (
+        s in [x.upper() for x in BLACKLIST_SYMBOLS]
+        or "MON" in s
+    )
+
+
 # ===== BLACKLIST =====
 BLACKLIST_SYMBOLS = [
-    "SPACE/USDT",
-    "MON/USDT",
+    "SPACE/USDT:USDT",
+    "MON/USDT:USDT",
 ]
 
 
