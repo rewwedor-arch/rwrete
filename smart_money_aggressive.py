@@ -1,4 +1,9 @@
 
+# ===== MARKET FILTERS =====
+BTC_TREND_FILTER = True
+HIGH_TIMEFRAME_CONFIRMATION = True
+
+
 
 # ===== EXTRA MON PROTECTION =====
 def is_blacklisted_symbol(symbol):
@@ -179,8 +184,8 @@ MIN_RR_RATIO = 2.5
 
 
 # ===== SAFE RISK MANAGEMENT =====
-MAX_DAILY_LOSS_PERCENT = 15
-MAX_CONSECUTIVE_LOSSES = 3
+MAX_DAILY_LOSS_PERCENT = 8
+MAX_CONSECUTIVE_LOSSES = 2
 ENABLE_BREAKEVEN = True
 BREAKEVEN_AT_PERCENT = 5.0
 TRAILING_AFTER_PERCENT = 8.0
@@ -196,10 +201,10 @@ ENABLE_MACD_CONFIRMATION = True
 ENABLE_RSI_FILTER = True
 ENABLE_ADX_FILTER = True
 
-MIN_SIGNAL_SCORE = 20
+MIN_SIGNAL_SCORE = 34
 EMA_PERIOD = 200
-RSI_LONG_MIN = 62
-ADX_MIN = 28
+RSI_LONG_MIN = 58
+ADX_MIN = 35
 
 MAX_VOLATILITY_PCT = 3.5
 
@@ -238,6 +243,7 @@ if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 elif sys.stdout:
     import codecs
+    if hasattr(sys.stdout, 'buffer'):
     sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer)
 
 from datetime import datetime, timedelta, timezone
@@ -294,11 +300,11 @@ class StrategyConfig:
     LEVERAGE: int = 75  # Максимальное плечо для агрессивного разгона
 
     # === SL/TP ДЛЯ СКАЛЬПИНГА x75 ===
-    STOP_LOSS_PCT: float = 0.35       # -15% ROE: потеря ~$1.5 с $10 маржи
-    TAKE_PROFIT_PCT: float = 0.8     # TP1 +60% ROE: прибыль $6 с $10
+    STOP_LOSS_PCT: float = 0.9       # -15% ROE: потеря ~$1.5 с $10 маржи
+    TAKE_PROFIT_PCT: float = 2.2     # TP1 +60% ROE: прибыль $6 с $10
     TAKE_PROFIT: float = 0.8
-    TP2_PCT: float = 1.5             # TP2 +112% ROE
-    TP3_PCT: float = 3.0             # TP3 +225% ROE (на бирже)
+    TP2_PCT: float = 3.8             # TP2 +112% ROE
+    TP3_PCT: float = 5.5             # TP3 +225% ROE (на бирже)
 
     DAILY_TARGET_MIN: float = 5.0
     DAILY_TARGET_MAX: float = 15.0
