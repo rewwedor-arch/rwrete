@@ -1890,7 +1890,7 @@ class SmartMoneyBot:
         except Exception:
             return True
 
-async def scan_market(self):
+    async def scan_market(self):
         if not self.is_running:
             return
         logger.info(f"Сканирование рынка... ({len(self.symbols_to_scan)} символов)")
@@ -1903,11 +1903,11 @@ async def scan_market(self):
                 continue
 
             # ИСПРАВЛЕНИЕ: проверяем волатильность перед анализом
-                            if await self.is_sideways_market(symbol):
-                    logger.debug(f"{symbol}: sideways market")
-                    continue
+            if await self.is_sideways_market(symbol):
+                logger.debug(f"{symbol}: sideways market")
+                continue
 
-                if not await self.check_volatility(symbol):
+            if not await self.check_volatility(symbol):
                 continue
 
             smc_result = await self.smc_analyzer.analyze_symbol(symbol)
