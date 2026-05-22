@@ -1,37 +1,4 @@
 
-
-# ===== SMART MARKET MODES =====
-TREND_MODE_ENABLED = True
-RANGE_MODE_ENABLED = True
-
-# Трендовый режим
-TREND_ADX_MIN = 28
-TREND_RSI_CONFIRM = 55
-
-# Флэт режим
-RANGE_ADX_MAX = 20
-RANGE_RSI_BUY = 35
-RANGE_RSI_SELL = 65
-
-# ===== SIMPLIFIED ENTRY SYSTEM =====
-# Оставляем только сильные фильтры
-USE_VOLUME_FILTER = True
-USE_TREND_FILTER = True
-USE_RSI_FILTER = True
-USE_BREAKOUT_FILTER = True
-USE_VOLATILITY_FILTER = True
-USE_OI_FILTER = True
-USE_ORDERFLOW_FILTER = True
-
-MAX_CONFIRMATIONS_REQUIRED = 5
-
-
-# ===== ULTRA FAST SCANNER =====
-SCAN_SYMBOLS_LIMIT = 220
-BATCH_SIZE = 50
-PARALLEL_SCANNING = True
-
-
 # ===== MARKET FILTERS =====
 BTC_TREND_FILTER = True
 HIGH_TIMEFRAME_CONFIRMATION = True
@@ -234,7 +201,7 @@ ENABLE_MACD_CONFIRMATION = True
 ENABLE_RSI_FILTER = True
 ENABLE_ADX_FILTER = True
 
-MIN_SIGNAL_SCORE = 22
+MIN_SIGNAL_SCORE = 34
 EMA_PERIOD = 200
 RSI_LONG_MIN = 58
 ADX_MIN = 35
@@ -272,12 +239,17 @@ import os
 import sys
 import threading
 
+
+# ===== UTF-8 SAFE OUTPUT =====
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 elif sys.stdout:
     import codecs
-    if hasattr(sys.stdout, 'buffer'):
-    sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer)
+    try:
+        if hasattr(sys.stdout, 'buffer'):
+            sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer)
+    except Exception:
+        pass
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_DOWN
@@ -2824,13 +2796,3 @@ async def runner_take_profit(current_roe, last_runner_tp=0):
         return RUNNER_CLOSE_PERCENT
 
     return 0
-
-# ===== NEW MARKET LOGIC =====
-# TREND MODE:
-# Используется для сильных импульсов и пробоев.
-#
-# RANGE MODE:
-# Используется для отскоков и флэта.
-#
-# Убраны слабые и дублирующиеся подтверждения,
-# которые ухудшали out-of-sample результаты.
