@@ -239,12 +239,16 @@ import os
 import sys
 import threading
 
+
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 elif sys.stdout:
     import codecs
-    if hasattr(sys.stdout, 'buffer'):
-    sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer)
+    try:
+        if hasattr(sys.stdout, 'buffer'):
+            sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer)
+    except Exception:
+        pass
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_DOWN
