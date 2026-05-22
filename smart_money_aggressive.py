@@ -1903,7 +1903,7 @@ async def scan_market(self):
                 continue
 
             # ИСПРАВЛЕНИЕ: проверяем волатильность перед анализом
-            if await self.is_sideways_market(symbol):
+                            if await self.is_sideways_market(symbol):
                     logger.debug(f"{symbol}: sideways market")
                     continue
 
