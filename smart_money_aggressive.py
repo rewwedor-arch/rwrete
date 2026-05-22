@@ -112,7 +112,7 @@ ENABLE_ORDER_BLOCK = True
 ENABLE_VOLUME_SPIKE = True
 ENABLE_SESSION_FILTER = True
 
-MIN_ADX = 28
+MIN_ADX = 20
 MIN_VOLUME_RATIO = 2.0
 MIN_RR_RATIO = 2.5
 MAX_OPEN_POSITIONS = 999
@@ -204,9 +204,12 @@ ENABLE_ADX_FILTER = True
 MIN_SIGNAL_SCORE = 34
 EMA_PERIOD = 200
 RSI_LONG_MIN = 58
-ADX_MIN = 35
+ADX_MIN = 22
 
 MAX_VOLATILITY_PCT = 3.5
+MAX_SINGLE_CANDLE_PCT = 2.5
+SIDEWAYS_ADX_THRESHOLD = 18
+SIDEWAYS_EMA_DISTANCE = 0.15
 
 class SmartTrailingMixin:
     def calculate_dynamic_trailing(self, profit_pct: float) -> float:
@@ -294,7 +297,7 @@ async def task_with_log(task_name: str, coro):
 
 MAX_CONSECUTIVE_LOSSES = 2
 MIN_VOLUME_RATIO = 1.5        # Было 1.0 — слишком много мусорных сигналов
-MIN_ADX = 28                  # Было 10 — входил в боковик без тренда
+MIN_ADX = 20                  # Было 10 — входил в боковик без тренда
 TRADE_COOLDOWN_MINUTES = 1
 LOSS_COOLDOWN_MINUTES = 3
 
@@ -1104,19 +1107,36 @@ class SmartMoneyBot:
     # ────────────────────────────────────────────────────────────────────────
 
     async def check_volatility(self, symbol: str) -> bool:
-        """Проверяет что монета не стоит и не в панике"""
+        """Проверяет нормальную волатильность и отсутствие panic candles"""
         try:
             ohlcv = await self.smc_analyzer.get_ohlcv(symbol, '5m', 20)
+
             if not ohlcv or len(ohlcv) < 10:
                 return False
+
             ranges = [(c[2] - c[3]) / c[3] * 100 for c in ohlcv[-10:]]
             avg_range = sum(ranges) / len(ranges)
+
             if avg_range < config.MIN_VOLATILITY_PCT:
                 logger.debug(f"{symbol}: слишком низкая волатильность {avg_range:.2f}%")
                 return False
+
             if avg_range > config.MAX_VOLATILITY_PCT:
-                logger.debug(f"{symbol}: слишком высокая волатильность {avg_range:.2f}% (паника)")
+                logger.debug(f"{symbol}: слишком высокая волатильность {avg_range:.2f}%")
                 return False
+
+            last_candle_range = (
+                (ohlcv[-1][2] - ohlcv[-1][3])
+                / ohlcv[-1][3]
+                * 100
+            )
+
+            if last_candle_range > config.MAX_SINGLE_CANDLE_PCT:
+                logger.debug(
+                    f"{symbol}: panic candle {last_candle_range:.2f}%"
+                )
+                return False
+
             return True
         except Exception as e:
             logger.error(f"Ошибка check_volatility {symbol}: {e}")
@@ -1837,7 +1857,40 @@ class SmartMoneyBot:
     # СКАНЕР РЫНКА
     # ────────────────────────────────────────────────────────────────────────
 
-    async def scan_market(self):
+    
+    async def is_sideways_market(self, symbol: str) -> bool:
+        """Фильтр боковика"""
+        try:
+            ohlcv = await self.smc_analyzer.get_ohlcv(symbol, '5m', 60)
+
+            if not ohlcv or len(ohlcv) < 50:
+                return True
+
+            closes = [c[4] for c in ohlcv]
+            highs = [c[2] for c in ohlcv]
+            lows = [c[3] for c in ohlcv]
+
+            adx = self.smc_analyzer.calculate_adx(highs, lows, closes, 14)
+            ema50 = self.smc_analyzer.calculate_ema(closes, 50)
+
+            if not adx or not ema50:
+                return True
+
+            current_price = closes[-1]
+
+            distance_pct = abs(
+                current_price - ema50[-1]
+            ) / ema50[-1] * 100
+
+            return (
+                adx[-1] < config.SIDEWAYS_ADX_THRESHOLD
+                and distance_pct < config.SIDEWAYS_EMA_DISTANCE
+            )
+
+        except Exception:
+            return True
+
+async def scan_market(self):
         if not self.is_running:
             return
         logger.info(f"Сканирование рынка... ({len(self.symbols_to_scan)} символов)")
@@ -1850,7 +1903,11 @@ class SmartMoneyBot:
                 continue
 
             # ИСПРАВЛЕНИЕ: проверяем волатильность перед анализом
-            if not await self.check_volatility(symbol):
+            if await self.is_sideways_market(symbol):
+                    logger.debug(f"{symbol}: sideways market")
+                    continue
+
+                if not await self.check_volatility(symbol):
                 continue
 
             smc_result = await self.smc_analyzer.analyze_symbol(symbol)
@@ -2610,30 +2667,18 @@ ENABLE_VOLUME_CONFIRMATION = True
 ENABLE_HTF_CONFIRMATION = True
 
 def ultra_signal_filter(adx, rsi, volume_ratio, ema_trend, macd_ok, bos, fvg):
-    confirmations = 0
+    """Упрощенный фильтр:
+    EMA + BOS + Volume + умеренный ADX
+    Без переоптимизации и поздних входов
+    """
 
-    if adx >= 25:
-        confirmations += 1
-
-    if 55 <= rsi <= 72:
-        confirmations += 1
-
-    if volume_ratio >= 1.8:
-        confirmations += 1
-
-    if ema_trend:
-        confirmations += 1
-
-    if macd_ok:
-        confirmations += 1
-
-    if bos:
-        confirmations += 1
-
-    if fvg:
-        confirmations += 1
-
-    return confirmations >= 6
+    return (
+        ema_trend
+        and bos
+        and volume_ratio >= 1.5
+        and adx >= 22
+        and 50 <= rsi <= 70
+    )
 
 print("🧠 ULTRA ANALYSIS MODE ENABLED")
 
