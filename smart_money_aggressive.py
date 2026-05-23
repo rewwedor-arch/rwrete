@@ -758,7 +758,8 @@ class SMCAnalyzer:
         try:
             return await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         except Exception as e:
-            logger.error(f"Ошибка OHLCV {symbol}: {e}")
+            if "-1122" not in str(e) and "Invalid symbol" not in str(e):
+                logger.error(f"Ошибка OHLCV {symbol}: {e}")
             return []
 
     def calculate_ema(self, prices, period) -> List[float]:
@@ -1172,13 +1173,17 @@ class SmartMoneyBot:
 
     async def update_top_symbols(self):
         try:
-            markets = await self.exchange.load_markets()
+            markets = await self.exchange.load_markets(True) # Force reload to get fresh status
             tickers = await self.exchange.fetch_tickers()
             usdt_perps = []
             for symbol, market in markets.items():
-                if 'USDT' in symbol and market.get('type') == 'swap':
-                    vol = tickers[symbol].get('quoteVolume', 0.0) if symbol in tickers else 0.0
-                    usdt_perps.append((symbol, vol))
+                # Проверяем, что пара торгуется за USDT, это своп (фьючерс) и она активна
+                if 'USDT' in symbol and market.get('type') == 'swap' and market.get('active', True):
+                    info = market.get('info', {})
+                    # Проверяем статус биржи, чтобы отсеять мусорные и закрытые пары
+                    if info.get('status', 'TRADING') == 'TRADING' and info.get('contractType', 'PERPETUAL') == 'PERPETUAL':
+                        vol = tickers[symbol].get('quoteVolume', 0.0) if symbol in tickers else 0.0
+                        usdt_perps.append((symbol, vol))
             usdt_perps.sort(key=lambda x: x[1], reverse=True)
             self.symbols_to_scan = [pair[0] for pair in usdt_perps]
             logger.info(f"🔄 Список пар обновлён (всего {len(self.symbols_to_scan)} шт.)")
