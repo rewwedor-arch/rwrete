@@ -1527,8 +1527,11 @@ class SmartMoneyBot:
                 return position
 
             except Exception as e:
-                logger.error(f"Ошибка открытия позиции {symbol}: {e}")
-                await self.send_telegram_message(f"❌ Ошибка открытия {symbol}: {e}")
+                err_str = str(e)
+                logger.error(f"Ошибка открытия позиции {symbol}: {err_str}")
+                # Не спамим в телеграм если это техническая ошибка лимитов биржи
+                if 'notional too small' not in err_str and 'Exceeded' not in err_str and 'Margin is insufficient' not in err_str and 'Fallback exhausted' not in err_str:
+                    await self.send_telegram_message(f"❌ Ошибка открытия {symbol}: {err_str}")
                 return None
 
         # ────────────────────────────────────────────────────────────────────────
@@ -1649,6 +1652,12 @@ class SmartMoneyBot:
             return False
 
         try:
+            # СТРОГО форматируем количество, иначе Binance выдаст ошибку точности (Precision/Invalid amount)
+            qty_to_close = float(self.exchange.amount_to_precision(symbol, qty_to_close))
+            
+            if qty_to_close <= 0:
+                return False
+
             if position.side == 'SHORT':
                 order = await self.exchange.create_market_buy_order(symbol, qty_to_close, params={"reduceOnly": True})
             else:
@@ -1691,56 +1700,7 @@ class SmartMoneyBot:
             await asyncio.sleep(0.5)
         await self.send_telegram_message(f"✅ Закрыто: {closed_count}/{len(position_ids)}")
 
-    async def close_partial_position(self, position: Position, qty_to_close: float, current_price: float):
-        try:
-            qty_to_close = float(self.exchange.amount_to_precision(position.symbol, qty_to_close))
-            if qty_to_close <= 0:
-                return
-            try:
-                if position.side == 'SHORT':
-                    await self.exchange.create_market_buy_order(position.symbol, qty_to_close, params = {
-                    "reduceOnly": True
-                }
 
-                # Binance futures иногда отвергает reduceOnly,
-                # если позиция уже частично закрыта или size изменился.
-                # В этом случае пробуем обычное закрытие.
-)
-                else:
-                    await self.exchange.create_market_sell_order(position.symbol, qty_to_close, params = {
-                    "reduceOnly": True
-                }
-
-                # Binance futures иногда отвергает reduceOnly,
-                # если позиция уже частично закрыта или size изменился.
-                # В этом случае пробуем обычное закрытие.
-)
-
-                # REAL partial pnl from margin, without leverage double counting
-                if position.side == 'SHORT':
-                    price_change_pct = ((position.entry_price - current_price) / position.entry_price) * 100
-                else:
-                    price_change_pct = ((current_price - position.entry_price) / position.entry_price) * 100
-
-                qty_ratio = qty_to_close / position.quantity if position.quantity > 0 else 1.0
-
-                chunk_pnl = (
-                    position.amount_usdt
-                    * (price_change_pct / 100.0)
-                    * position.leverage
-                    * qty_ratio
-                )
-            except Exception as e:
-                err_str = str(e)
-                if 'ReduceOnly' in err_str or '-2022' in err_str or 'reduce-only' in err_str.lower() or 'not found' in err_str.lower() or 'position is zero' in err_str.lower() or 'No need to change position' in err_str:
-                    logger.warning(f"Позиция {position.symbol} частично закрыта, но объем уже отсутствует на бирже.")
-                    chunk_pnl = 0
-                else:
-                    raise
-            position.realized_pnl_usd += chunk_pnl
-            position.remaining_quantity = max(0.0, position.remaining_quantity - qty_to_close)
-        except Exception as e:
-            logger.error(f"Ошибка частичного закрытия {position.symbol}: {e}")
 
     async def apply_dynamic_sl(self, position: Position, price_change_pct: float, current_price: float):
         """Динамический SL — двигаем по достижении порогов цены"""
