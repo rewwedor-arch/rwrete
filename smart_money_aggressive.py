@@ -115,7 +115,7 @@ ENABLE_SESSION_FILTER = True
 MIN_ADX = 20
 MIN_VOLUME_RATIO = 2.0
 MIN_RR_RATIO = 2.5
-MAX_OPEN_POSITIONS = 999
+MAX_OPEN_POSITIONS = 5
 
 def institutional_filter(
     adx,
@@ -175,7 +175,7 @@ LAST_LOSS_TIME = 0
 LOSS_COOLDOWN_SECONDS = 1800
 
 # ===== HIGH LEVERAGE PROTECTION =====
-MAX_OPEN_POSITIONS = 999
+MAX_OPEN_POSITIONS = 5
 USE_ISOLATED_MARGIN = True
 ENABLE_DYNAMIC_SL = True
 ENABLE_TRAILING_PROFIT_LOCK = True
@@ -1195,7 +1195,7 @@ class SmartMoneyBot:
             pass
 
     def compute_optimal_slots(self, virtual_equity: float) -> int:
-        return 5  # Всегда максимум 5 позиций (компоундинг 20% от депозита на сделку)
+        return 1  # Используем весь депозит в одной позиции с полным реинвестом
 
     async def calculate_position_size(self, entry_price, score=5) -> tuple:
         try:
@@ -1208,20 +1208,24 @@ class SmartMoneyBot:
                 logger.warning(f"Свободно ${free_balance:.2f} < минимума ${config.MIN_SLOT_USDT}. Ждём.")
                 return 0, 0, 0
 
-            # 20% от TOTAL баланса на сделку (компаундинг), но не больше чем свободно
-            target_amount = total_balance * 0.20
-            amount_usdt = min(target_amount, free_balance * 0.95)  # 95% от свободного — оставляем запас на комиссии
+            # Используем почти весь доступный баланс.
+            # Вся прибыль автоматически реинвестируется.
+            amount_usdt = free_balance * 0.98
 
             if amount_usdt < config.MIN_SLOT_USDT:
-                amount_usdt = config.MIN_SLOT_USDT
-                if amount_usdt > free_balance * 0.95:
-                    return 0, 0, 0
+                return 0, 0, 0
 
             leverage = config.LEVERAGE
             notional = amount_usdt * leverage
             quantity = notional / entry_price
-            logger.info(f"💰 Размер: маржа=${amount_usdt:.2f} | free=${free_balance:.2f} | total=${total_balance:.2f} | x{leverage}")
+
+            logger.info(
+                f"🚀 FULL REINVEST MODE | маржа=${amount_usdt:.2f} "
+                f"| free=${free_balance:.2f} | total=${total_balance:.2f} | x{leverage}"
+            )
+
             return quantity, amount_usdt, notional
+
         except Exception as e:
             logger.error(f"Ошибка расчёта размера: {e}")
             return 0, 0, 0
@@ -1556,29 +1560,63 @@ class SmartMoneyBot:
                 logger.warning(f"Не удалось отменить ордера {symbol}: {cancel_e}")
 
             try:
-                if position.side == 'SHORT':
-                    order = await self.exchange.create_market_buy_order(symbol, qty_close, params = {
-                    "reduceOnly": True
-                }
+                # Проверяем реальный размер позиции на Binance
+                positions = await self.exchange.fetch_positions([symbol])
 
-                # Binance futures иногда отвергает reduceOnly,
-                # если позиция уже частично закрыта или size изменился.
-                # В этом случае пробуем обычное закрытие.
-)
+                real_size = 0.0
+                for p in positions:
+                    contracts = abs(float(p.get('contracts', 0) or 0))
+                    if contracts > 0:
+                        real_size = contracts
+                        break
+
+                if real_size <= 0:
+                    logger.warning(f"Позиция {symbol} уже закрыта на Binance")
+                    order = {}
                 else:
-                    order = await self.exchange.create_market_sell_order(symbol, qty_close, params = {
-                    "reduceOnly": True
-                }
+                    qty_close = min(qty_close, real_size)
 
-                # Binance futures иногда отвергает reduceOnly,
-                # если позиция уже частично закрыта или size изменился.
-                # В этом случае пробуем обычное закрытие.
-)
+                    if position.side == 'SHORT':
+                        order = await self.exchange.create_market_buy_order(
+                            symbol,
+                            qty_close,
+                            params={"reduceOnly": True}
+                        )
+                    else:
+                        order = await self.exchange.create_market_sell_order(
+                            symbol,
+                            qty_close,
+                            params={"reduceOnly": True}
+                        )
+
             except Exception as order_e:
                 err_str = str(order_e)
-                if 'ReduceOnly' in err_str or '-2022' in err_str or 'reduce-only' in err_str.lower() or 'not found' in err_str.lower() or 'position is zero' in err_str.lower() or 'No need to change position' in err_str:
-                    logger.warning(f"Позиция {symbol} уже была закрыта на бирже. Синхронизируем состояние.")
-                    order = {} 
+
+                # FIX Binance reduceOnly -2022
+                if '-2022' in err_str or 'ReduceOnly' in err_str:
+                    logger.warning(f"ReduceOnly rejected для {symbol}, пробуем обычное закрытие")
+
+                    try:
+                        positions = await self.exchange.fetch_positions([symbol])
+
+                        real_size = 0.0
+                        for p in positions:
+                            contracts = abs(float(p.get('contracts', 0) or 0))
+                            if contracts > 0:
+                                real_size = contracts
+                                break
+
+                        if real_size <= 0:
+                            order = {}
+                        else:
+                            if position.side == 'SHORT':
+                                order = await self.exchange.create_market_buy_order(symbol, real_size)
+                            else:
+                                order = await self.exchange.create_market_sell_order(symbol, real_size)
+
+                    except Exception as ex2:
+                        logger.error(f"Не удалось закрыть {symbol}: {ex2}")
+                        order = {}
                 else:
                     logger.error(f"Ошибка создания ордера закрытия {symbol}: {order_e}")
                     raise
