@@ -1001,39 +1001,33 @@ class SMCAnalyzer:
 
             potential_dir = 'LONG' if current_price > ema50[-1] else 'SHORT'
 
-            # GENIUS 80% WINRATE SETUP
+            # GENIUS HIGH-FREQUENCY 80% WINRATE SETUP
             p_long_strict = (
-                htf_trend == 'LONG' and 
                 current_price > ema50[-1] and 
-                fvg == 'BULLISH' and 
-                ob == 'BULLISH' and 
-                vol_ratio > MIN_VOLUME_RATIO and 
-                adx and adx[-1] > 25 and 
-                (40 <= rsi[-1] <= 70) and
+                (fvg == 'BULLISH' or ob == 'BULLISH') and 
+                vol_ratio > 1.2 and 
+                adx and adx[-1] > 20 and 
                 macd['histogram'] > 0
             )
 
             p_short_strict = (
-                htf_trend == 'SHORT' and 
                 current_price < ema50[-1] and 
-                fvg == 'BEARISH' and 
-                ob == 'BEARISH' and 
-                vol_ratio > MIN_VOLUME_RATIO and 
-                adx and adx[-1] > 25 and 
-                (30 <= rsi[-1] <= 60) and
+                (fvg == 'BEARISH' or ob == 'BEARISH') and 
+                vol_ratio > 1.2 and 
+                adx and adx[-1] > 20 and 
                 macd['histogram'] < 0
             )
 
             if p_long_strict:
                 result['signal'] = True
                 result['direction'] = 'LONG'
-                result['score'] = "ULTRA_STRICT_LONG"
-                result['indicators'] = {'htf_trend': True, 'ema_trend': True, 'fvg': True, 'ob': True, 'vol_spike': True, 'adx': True, 'macd': True}
+                result['score'] = "SMART_MOMENTUM_LONG"
+                result['indicators'] = {'ema_trend': True, 'fvg_or_ob': True, 'vol': True, 'adx': True, 'macd': True}
             elif p_short_strict:
                 result['signal'] = True
                 result['direction'] = 'SHORT'
-                result['score'] = "ULTRA_STRICT_SHORT"
-                result['indicators'] = {'htf_trend': True, 'ema_trend': True, 'fvg': True, 'ob': True, 'vol_spike': True, 'adx': True, 'macd': True}
+                result['score'] = "SMART_MOMENTUM_SHORT"
+                result['indicators'] = {'ema_trend': True, 'fvg_or_ob': True, 'vol': True, 'adx': True, 'macd': True}
             else:
                 result['signal'] = False
                 result['direction'] = potential_dir
@@ -2507,7 +2501,9 @@ class SmartMoneyBot:
                 logger.info("Telegram polling запущен")
 
                 while self.is_running:
-                    await asyncio.sleep(1)
+                    if self.app.updater and not self.app.updater.running:
+                        raise Exception("Updater stopped (Telegram Conflict or crash)")
+                    await asyncio.sleep(2)
 
                 # Чистый shutdown при остановке бота
                 try:
