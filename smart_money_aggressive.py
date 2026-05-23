@@ -307,12 +307,12 @@ class StrategyConfig:
     ENTRY_AMOUNT: float = 10.0
     LEVERAGE: int = 75  # Максимальное плечо для агрессивного разгона
 
-    # === SL/TP ДЛЯ СКАЛЬПИНГА x75 ===
-    STOP_LOSS_PCT: float = 0.9       # -15% ROE: потеря ~$1.5 с $10 маржи
-    TAKE_PROFIT_PCT: float = 2.2     # TP1 +60% ROE: прибыль $6 с $10
+    # === SL/TP ДЛЯ АГРЕССИВНОГО СКАЛЬПИНГА x75 ===
+    STOP_LOSS_PCT: float = 0.8       # -60% ROE: жёсткий SL
+    TAKE_PROFIT_PCT: float = 1.5     # TP1 на бирже
     TAKE_PROFIT: float = 0.8
-    TP2_PCT: float = 3.8             # TP2 +112% ROE
-    TP3_PCT: float = 5.5             # TP3 +225% ROE (на бирже)
+    TP2_PCT: float = 2.5             # TP2 на бирже
+    TP3_PCT: float = 4.0             # TP3 на бирже (closePosition)
 
     DAILY_TARGET_MIN: float = 5.0
     DAILY_TARGET_MAX: float = 15.0
@@ -339,14 +339,14 @@ class StrategyConfig:
     MIN_PEAK_PNL_TO_TRACK: float = 25.0
     PEAK_DRAWDOWN_CLOSE_PCT: float = 8.0
     # Трейлинг
-    TRAILING_ACTIVATE_PCT: float = 30.0
-    TRAILING_DRAWDOWN_CLOSE_PCT: float = 6.0
+    TRAILING_ACTIVATE_PCT: float = 15.0     # +15% ROE — включаем трейлинг
+    TRAILING_DRAWDOWN_CLOSE_PCT: float = 5.0 # Откат 5% от пика — закрываем
     # Частичные TP (в % ROE)
-    PARTIAL_TP1_PCT: float = 30.0    # 0.4% цены → закрыть 40%, SL→безубыток
-    PARTIAL_TP2_PCT: float = 60.0    # 0.8% цены → закрыть 30%
-    PARTIAL_TP3_PCT: float = 112.0   # 1.5% цены → закрыть остаток
+    PARTIAL_TP1_PCT: float = 20.0    # +20% ROE → закрыть 40%, SL→безубыток
+    PARTIAL_TP2_PCT: float = 45.0    # +45% ROE → закрыть 30%
+    PARTIAL_TP3_PCT: float = 80.0    # +80% ROE → закрыть остаток
 
-    POSITION_TIMEOUT_HOURS: int = 18
+    POSITION_TIMEOUT_HOURS: int = 4  # Макс 4 часа на позицию
 
     # Трейлинг-стоп по цене
     TRAILING_DISTANCE_PCT: float = 0.2
@@ -1693,25 +1693,27 @@ class SmartMoneyBot:
         new_sl_price = None
         new_level = position.dynamic_sl_level
 
-        # Пороги для x75 скальпинга: быстрый безубыток
-        if price_change_pct >= 1.5 and position.dynamic_sl_level < 3:
+        # Пороги для агрессивного скальпинга: молниеносный безубыток
+        if price_change_pct >= 0.8 and position.dynamic_sl_level < 3:
+            # +60% ROE — SL в плюс
             if position.side == 'SHORT':
-                new_sl_price = position.entry_price * (1 - 0.008)
+                new_sl_price = position.entry_price * (1 - 0.005)
             else:
-                new_sl_price = position.entry_price * (1 + 0.008)
+                new_sl_price = position.entry_price * (1 + 0.005)
             new_level = 3
-        elif price_change_pct >= 0.8 and position.dynamic_sl_level < 2:
-            if position.side == 'SHORT':
-                new_sl_price = position.entry_price * (1 - 0.003)
-            else:
-                new_sl_price = position.entry_price * (1 + 0.003)
-            new_level = 2
-        elif price_change_pct >= 0.3 and position.dynamic_sl_level < 1:
-            # БЕЗУБЫТОК при +0.3% цены (+22% ROE) — защита прибыли!
+        elif price_change_pct >= 0.4 and position.dynamic_sl_level < 2:
+            # +30% ROE — SL на безубыток
             if position.side == 'SHORT':
                 new_sl_price = position.entry_price * (1 - 0.001)
             else:
                 new_sl_price = position.entry_price * (1 + 0.001)
+            new_level = 2
+        elif price_change_pct >= 0.15 and position.dynamic_sl_level < 1:
+            # +11% ROE — подтягиваем SL ближе к входу
+            if position.side == 'SHORT':
+                new_sl_price = position.entry_price * (1 + 0.003)  # Сжать стоп
+            else:
+                new_sl_price = position.entry_price * (1 - 0.003)
             new_level = 1
 
         if not new_sl_price:
@@ -1824,9 +1826,31 @@ class SmartMoneyBot:
 
                 pair = position.symbol.replace('/USDT', '')
 
-                # Программный SL (согласован с биржевым — только как резерв)
-                # БЫСТРЫЙ ПЕРЕВОРОТ: цена идёт против нас с сильным импульсом
-                # Анализ тренда для убыточных позиций (с учётом направления)
+                # АКТИВНЫЙ АНАЛИЗ ОТКРЫТЫХ ПОЗИЦИЙ
+                # Если позиция убыточна и тренд развернулся — закрываем рано
+                if pnl_pct < -10 and not position.partial_tp1_done:
+                    try:
+                        ohlcv_check = await self.smc_analyzer.get_ohlcv(position.symbol, '5m', 20)
+                        if ohlcv_check and len(ohlcv_check) >= 10:
+                            closes_check = [c[4] for c in ohlcv_check]
+                            ema10 = self.smc_analyzer.calculate_ema(closes_check, 10)
+                            macd_check = self.smc_analyzer.calculate_macd(closes_check)
+                            if ema10:
+                                trend_against = (
+                                    (position.side == 'LONG' and current_price < ema10[-1] and macd_check['histogram'] < 0) or
+                                    (position.side == 'SHORT' and current_price > ema10[-1] and macd_check['histogram'] > 0)
+                                )
+                                if trend_against:
+                                    await self.send_telegram_message(
+                                        f"⚠️ РАЗВОРОТ ТРЕНДА | {pair}\n"
+                                        f"Тренд против позиции! ROE: {pnl_pct:+.1f}%\n"
+                                        f"Закрываем досрочно: ${pnl_usd:+.2f}"
+                                    )
+                                    await self.close_position(position_id)
+                                    continue
+                    except Exception:
+                        pass
+
                 # Откат от пика
                 if position.peak_pnl >= config.MIN_PEAK_PNL_TO_TRACK:
                     drawdown = position.peak_pnl - pnl_pct
@@ -1896,8 +1920,8 @@ class SmartMoneyBot:
         duration = now - position.timestamp
         duration_minutes = duration.total_seconds() / 60
 
-        # Таймаут: если за 2 часа не было даже +15% ROE (0.2% цены) — сделка мёртвая
-        if position.peak_pnl < 15.0 and duration_minutes > 120:
+        # Таймаут: если за 30 мин не было движения — мёртвая сделка, закрываем
+        if position.peak_pnl < 10.0 and duration_minutes > 30:
             await self.send_telegram_message(
                 f"⏱ ТАЙМАУТ | {position.symbol.replace('/USDT', '')}\n"
                 f"Нет движения за {duration_minutes:.0f} мин\n"
