@@ -859,6 +859,21 @@ class SMCAnalyzer:
             return "CHoCH_BEARISH" if closes[-15] < closes[-5] else "BOS_DOWN"
         return "NONE"
 
+    def detect_liquidity_sweep(self, ohlcv) -> str:
+        if len(ohlcv) < 15:
+            return 'NONE'
+        c2 = ohlcv[-2]
+        local_lows = min([x[3] for x in ohlcv[-15:-2]])
+        local_highs = max([x[2] for x in ohlcv[-15:-2]])
+        
+        # Bullish Sweep: wick below local low, close above
+        if c2[3] < local_lows and c2[4] > local_lows:
+            return 'BULLISH'
+        # Bearish Sweep: wick above local high, close below
+        if c2[2] > local_highs and c2[4] < local_highs:
+            return 'BEARISH'
+        return 'NONE'
+
     def detect_fvg(self, ohlcv) -> str:
         if len(ohlcv) < 5:
             return ''
@@ -995,31 +1010,49 @@ class SMCAnalyzer:
             if ob == 'BEARISH':
                 short_score += 1; short_ind['order_block'] = True
 
+            # 9. Liquidity Sweep (PRO SMC concept)
+            sweep = self.detect_liquidity_sweep(ohlcv_5m)
+            result['sweep'] = sweep
+            if sweep == 'BULLISH':
+                long_score += 2; long_ind['liq_sweep'] = True
+            if sweep == 'BEARISH':
+                short_score += 2; short_ind['liq_sweep'] = True
+
+            # 10. HTF (1H) Alignment (PRO MTF concept)
+            if htf_trend == 'LONG':
+                long_score += 1; long_ind['htf_align'] = True
+            elif htf_trend == 'SHORT':
+                short_score += 1; short_ind['htf_align'] = True
+
             # ========== INSTITUTIONAL ENTRY SYSTEM ==========
             # Тренд (EMA50) + Структура (BOS/FVG/OB) + Моментум (MACD/RSI)
             is_uptrend = current_price > ema50[-1]
             is_downtrend = current_price < ema50[-1]
 
             # Проверяем наличие СТРУКТУРНОГО подтверждения (SMC)
-            long_has_structure = long_ind.get('bos') or long_ind.get('fvg') or long_ind.get('order_block')
-            short_has_structure = short_ind.get('bos') or short_ind.get('fvg') or short_ind.get('order_block')
+            long_has_structure = long_ind.get('bos') or long_ind.get('fvg') or long_ind.get('order_block') or long_ind.get('liq_sweep')
+            short_has_structure = short_ind.get('bos') or short_ind.get('fvg') or short_ind.get('order_block') or short_ind.get('liq_sweep')
 
             # Проверяем наличие МОМЕНТУМ подтверждения
             long_has_momentum = long_ind.get('macd') or long_ind.get('rsi_momentum')
             short_has_momentum = short_ind.get('macd') or short_ind.get('rsi_momentum')
+            
+            # PRO: Избегаем входа на хаях (FOMO)
+            long_not_overbought = rsi[-1] < 75 if (rsi and len(rsi)>0) else True
+            short_not_oversold = rsi[-1] > 25 if (rsi and len(rsi)>0) else True
 
-            if is_uptrend and long_has_structure and long_has_momentum and long_score >= 3:
+            if is_uptrend and long_has_structure and long_has_momentum and long_not_overbought and long_score >= 4:
                 result['signal'] = True
                 result['direction'] = 'LONG'
                 result['score'] = f"LONG_{long_score}"
                 result['indicators'] = long_ind
-                logger.info(f"✅ {symbol} LONG score={long_score} struct={long_has_structure} mom={long_has_momentum} ind={long_ind}")
-            elif is_downtrend and short_has_structure and short_has_momentum and short_score >= 3:
+                logger.info(f"✅ {symbol} PRO LONG score={long_score} struct={long_has_structure} mom={long_has_momentum} ind={long_ind}")
+            elif is_downtrend and short_has_structure and short_has_momentum and short_not_oversold and short_score >= 4:
                 result['signal'] = True
                 result['direction'] = 'SHORT'
                 result['score'] = f"SHORT_{short_score}"
                 result['indicators'] = short_ind
-                logger.info(f"✅ {symbol} SHORT score={short_score} struct={short_has_structure} mom={short_has_momentum} ind={short_ind}")
+                logger.info(f"✅ {symbol} PRO SHORT score={short_score} struct={short_has_structure} mom={short_has_momentum} ind={short_ind}")
             else:
                 result['signal'] = False
                 result['direction'] = 'LONG' if is_uptrend else 'SHORT'
