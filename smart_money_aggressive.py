@@ -1238,26 +1238,36 @@ class SmartMoneyBot:
             free_balance = float(balance.get('USDT', {}).get('free', 0))
             total_balance = float(balance.get('USDT', {}).get('total', 0))
 
-            if free_balance < config.MIN_SLOT_USDT:
+            # Ограничиваем баланс начальным депозитом + заработанным PnL (чтобы бот не брал лишние деньги с аккаунта)
+            stats = self.db.get_all_statistics()
+            total_pnl = stats.get('total_pnl', 0) or 0
+            virtual_balance = max(10.0, config.DEPOSIT + total_pnl)
+            
+            # Бот использует минимум из реального свободного баланса и своего виртуального депозита
+            working_balance = min(free_balance, virtual_balance)
+
+            if working_balance < config.MIN_SLOT_USDT:
                 logger.warning(
-                    f"Свободно ${free_balance:.2f} < минимума ${config.MIN_SLOT_USDT}"
+                    f"Рабочий баланс ${working_balance:.2f} (Свободно: ${free_balance:.2f}) < минимума ${config.MIN_SLOT_USDT}"
                 )
                 return 0, 0, 0
 
-            # Динамический риск по силе сигнала
+            # Динамический риск по силе сигнала (от 15% до 50% для разгона)
             risk_map = {
                 2: 0.15,
                 3: 0.25,
                 4: 0.35,
-                5: 0.50
+                5: 0.50,
+                6: 0.50,
+                7: 0.50
             }
 
             risk_percent = risk_map.get(score, 0.20)
 
-            # Никогда не превышаем депозит
+            # Высчитываем сумму для входа из рабочего баланса
             amount_usdt = min(
-                free_balance * risk_percent,
-                free_balance * 0.95
+                working_balance * risk_percent,
+                free_balance * 0.95  # Физическая защита от нехватки маржи
             )
 
             if amount_usdt < config.MIN_SLOT_USDT:
