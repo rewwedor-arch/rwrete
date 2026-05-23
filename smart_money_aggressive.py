@@ -1627,6 +1627,42 @@ class SmartMoneyBot:
             await self.send_telegram_message(f"❌ Ошибка закрытия позиции {position_id}: {e}")
             return False
 
+    async def close_partial_position(self, position, qty_to_close, current_price) -> bool:
+        symbol = position.symbol
+        if qty_to_close <= 0 or qty_to_close > position.remaining_quantity:
+            return False
+
+        try:
+            if position.side == 'SHORT':
+                order = await self.exchange.create_market_buy_order(symbol, qty_to_close, params={"reduceOnly": True})
+            else:
+                order = await self.exchange.create_market_sell_order(symbol, qty_to_close, params={"reduceOnly": True})
+            
+            exit_price = order.get('average') or order.get('price') or current_price
+            exit_price = float(exit_price)
+            
+            # Считаем PnL этой части
+            if position.side == 'SHORT':
+                price_change_pct = ((position.entry_price - exit_price) / position.entry_price) * 100
+            else:
+                price_change_pct = ((exit_price - position.entry_price) / position.entry_price) * 100
+                
+            leg_pnl = position.amount_usdt * (price_change_pct / 100.0) * position.leverage * (qty_to_close / position.quantity)
+            
+            # Обновляем состояние позиции в памяти
+            position.remaining_quantity -= qty_to_close
+            position.realized_pnl_usd += leg_pnl
+            logger.info(f"Частично закрыта {symbol}: {qty_to_close} по {exit_price}. PnL: ${leg_pnl:.2f}")
+            return True
+        except Exception as e:
+            err_str = str(e)
+            if 'ReduceOnly' in err_str or '-2022' in err_str or 'reduce-only' in err_str.lower():
+                logger.warning(f"Частичное закрытие {symbol} отклонено (ReduceOnly). Возможно, уже закрыто.")
+                position.remaining_quantity -= qty_to_close
+                return True
+            logger.error(f"Ошибка частичного закрытия {symbol}: {e}")
+            return False
+
 
     async def close_all_positions(self, emergency=False):
         position_ids = list(self.positions.keys())
