@@ -206,10 +206,10 @@ EMA_PERIOD = 200
 RSI_LONG_MIN = 58
 ADX_MIN = 22
 
-MAX_VOLATILITY_PCT = 3.5
-MAX_SINGLE_CANDLE_PCT = 2.5
-SIDEWAYS_ADX_THRESHOLD = 18
-SIDEWAYS_EMA_DISTANCE = 0.15
+MAX_VOLATILITY_PCT = 8.0
+MAX_SINGLE_CANDLE_PCT = 5.0
+SIDEWAYS_ADX_THRESHOLD = 12
+SIDEWAYS_EMA_DISTANCE = 0.08
 
 class SmartTrailingMixin:
     def calculate_dynamic_trailing(self, profit_pct: float) -> float:
@@ -863,39 +863,35 @@ class SMCAnalyzer:
         if len(ohlcv) < 5:
             return ''
         current_price = ohlcv[-1][4]
-        for i in range(len(ohlcv) - 4, len(ohlcv) - 2):
+        # Scan last 10 candles for FVG (wider window)
+        start = max(0, len(ohlcv) - 12)
+        for i in range(start, len(ohlcv) - 2):
             c1, c2, c3 = ohlcv[i], ohlcv[i+1], ohlcv[i+2]
             high1, low1 = c1[2], c1[3]
             high2, low2 = c2[2], c2[3]
             high3, low3 = c3[2], c3[3]
-            impulse_size = abs(high2 - low2)
+            # Bullish FVG: gap between candle 1 high and candle 3 low
             if low3 > high1:
-                gap_size = low3 - high1
-                if gap_size > impulse_size * 0.3:
-                    if high1 <= current_price <= low3 and current_price < high3:
-                        return 'BULLISH'
+                return 'BULLISH'
+            # Bearish FVG: gap between candle 1 low and candle 3 high  
             if high3 < low1:
-                gap_size = low1 - high3
-                if gap_size > impulse_size * 0.3:
-                    if high3 <= current_price <= low1 and current_price > low3:
-                        return 'BEARISH'
+                return 'BEARISH'
         return ''
 
     def detect_order_block(self, ohlcv) -> str:
         if len(ohlcv) < 10:
             return 'NONE'
-        # Basic OB logic: last opposite candle before a strong move that breaks structure
         for i in range(len(ohlcv)-10, len(ohlcv)-2):
             c1, c2, c3 = ohlcv[i], ohlcv[i+1], ohlcv[i+2]
-            # Bullish OB: down candle before strong up move
+            # Bullish OB: down candle followed by up candles
             if c1[4] < c1[1] and c2[4] > c2[1] and c3[4] > c3[1]:
                 move_pct = (c3[4] - c1[4]) / c1[4] * 100
-                if move_pct > 0.4:
+                if move_pct > 0.15:
                     return 'BULLISH'
-            # Bearish OB: up candle before strong down move
+            # Bearish OB: up candle followed by down candles
             if c1[4] > c1[1] and c2[4] < c2[1] and c3[4] < c3[1]:
                 move_pct = (c1[4] - c3[4]) / c1[4] * 100
-                if move_pct > 0.4:
+                if move_pct > 0.15:
                     return 'BEARISH'
         return 'NONE'
 
@@ -1972,27 +1968,15 @@ class SmartMoneyBot:
             if any(p.symbol == symbol for p in self.positions.values()):
                 return
             if await self.is_sideways_market(symbol):
+                logger.debug(f"{symbol}: отсеян (боковик)")
                 return
             if not await self.check_volatility(symbol):
+                logger.debug(f"{symbol}: отсеян (волатильность)")
                 return
 
             smc_result = await self.smc_analyzer.analyze_symbol(symbol)
             if smc_result['signal']:
-                try:
-                    ohlcv_1m = await self.smc_analyzer.get_ohlcv(symbol, '1m', limit=5)
-                    if ohlcv_1m and len(ohlcv_1m) >= 3:
-                        c1m = [c[4] for c in ohlcv_1m]
-                        mom_1m = (c1m[-1] - c1m[-3]) / c1m[-3] * 100
-                        if smc_result['direction'] == 'LONG' and mom_1m < -0.05:
-                            logger.info(f"⛔ {symbol} LONG отклонён: 1м импульс {mom_1m:+.3f}% (вниз)")
-                            return
-                        if smc_result['direction'] == 'SHORT' and mom_1m > 0.05:
-                            logger.info(f"⛔ {symbol} SHORT отклонён: 1м импульс {mom_1m:+.3f}% (вверх)")
-                            return
-                except Exception:
-                    pass
-
-                logger.info(f"СИГНАЛ: {symbol} ({smc_result['score']})")
+                logger.info(f"✅ СИГНАЛ НАЙДЕН: {symbol} {smc_result['direction']} ({smc_result['score']})")
                 ticker = await self.exchange.fetch_ticker(symbol)
                 entry_price = ticker['last']
                 await self.open_position(symbol, entry_price, smc_result)
