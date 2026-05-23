@@ -1199,35 +1199,28 @@ class SmartMoneyBot:
 
     async def calculate_position_size(self, entry_price, score=5) -> tuple:
         try:
-            stats = self.db.get_all_statistics()
-            total_pnl = float(stats.get('total_pnl') or 0.0)
-            virtual_equity = max(config.DEPOSIT + total_pnl, 0.0)
-            locked_margin = sum(p.amount_usdt for p in self.positions.values())
-            free_equity = virtual_equity - locked_margin
+            # Берём РЕАЛЬНЫЙ баланс с биржи, не из БД!
+            balance = await self.exchange.fetch_balance()
+            free_balance = float(balance.get('USDT', {}).get('free', 0))
+            total_balance = float(balance.get('USDT', {}).get('total', 0))
 
-            if free_equity < config.MIN_SLOT_USDT:
-                logger.warning(f"Свободно ${free_equity:.2f} < минимума. Ждём закрытия позиций.")
+            if free_balance < config.MIN_SLOT_USDT:
+                logger.warning(f"Свободно ${free_balance:.2f} < минимума ${config.MIN_SLOT_USDT}. Ждём.")
                 return 0, 0, 0
 
-            optimal_slots = self.compute_optimal_slots(virtual_equity)
-            logger.info(f"💰 Баланс: виртуальный=${virtual_equity:.2f} | свободно=${free_equity:.2f}")
-
-            # Гениальный сложный процент (Compounding): берем 20% от всего депозита на сделку
-            target_amount_usdt = virtual_equity / optimal_slots
-            # Защита: бот не может вложить в одну сделку больше 30% начального депозита, чтобы избежать багов с переинвестом
-            max_allowed_margin = max(config.DEPOSIT * 0.3, config.MIN_SLOT_USDT)
-            amount_usdt = min(target_amount_usdt, free_equity, max_allowed_margin)
+            # 20% от TOTAL баланса на сделку (компаундинг), но не больше чем свободно
+            target_amount = total_balance * 0.20
+            amount_usdt = min(target_amount, free_balance * 0.95)  # 95% от свободного — оставляем запас на комиссии
 
             if amount_usdt < config.MIN_SLOT_USDT:
-                if free_equity >= config.MIN_SLOT_USDT:
-                    amount_usdt = config.MIN_SLOT_USDT
-                else:
+                amount_usdt = config.MIN_SLOT_USDT
+                if amount_usdt > free_balance * 0.95:
                     return 0, 0, 0
 
             leverage = config.LEVERAGE
             notional = amount_usdt * leverage
             quantity = notional / entry_price
-            logger.info(f"Размер: маржа=${amount_usdt:.2f} | плечо=x{leverage} | номинал=${notional:.2f}")
+            logger.info(f"💰 Размер: маржа=${amount_usdt:.2f} | free=${free_balance:.2f} | total=${total_balance:.2f} | x{leverage}")
             return quantity, amount_usdt, notional
         except Exception as e:
             logger.error(f"Ошибка расчёта размера: {e}")
@@ -1527,7 +1520,6 @@ class SmartMoneyBot:
         # ────────────────────────────────────────────────────────────────────────
 
     async def close_position(self, position_id, emergency=False) -> bool:
-        was_already_closed = False
         try:
             if position_id not in self.positions:
                 logger.warning(f"Позиция {position_id} не найдена")
@@ -1563,32 +1555,24 @@ class SmartMoneyBot:
                 # если позиция уже частично закрыта или size изменился.
                 # В этом случае пробуем обычное закрытие.
 )
-        except Exception as order_e:
-            err_str = str(order_e)
-            if 'ReduceOnly' in err_str or '-2022' in err_str or 'reduce-only' in err_str.lower() or 'not found' in err_str.lower() or 'position is zero' in err_str.lower() or 'No need to change position' in err_str:
-                logger.warning(f"Позиция {symbol} уже была закрыта на бирже. Синхронизируем состояние.")
-                was_already_closed = True
-                order = {} 
-            else:
-                logger.error(f"Ошибка создания ордера закрытия {symbol}: {order_e}")
-                raise
+            except Exception as order_e:
+                err_str = str(order_e)
+                if 'ReduceOnly' in err_str or '-2022' in err_str or 'reduce-only' in err_str.lower() or 'not found' in err_str.lower() or 'position is zero' in err_str.lower() or 'No need to change position' in err_str:
+                    logger.warning(f"Позиция {symbol} уже была закрыта на бирже. Синхронизируем состояние.")
+                    order = {} 
+                else:
+                    logger.error(f"Ошибка создания ордера закрытия {symbol}: {order_e}")
+                    raise
 
-        exit_price = order.get('average') or order.get('price')
-        if not exit_price:
-            try:
-                ticker = await self.exchange.fetch_ticker(symbol)
-                exit_price = ticker['last']
-            except Exception:
-                exit_price = position.entry_price
-        exit_price = float(exit_price)
+            exit_price = order.get('average') or order.get('price')
+            if not exit_price:
+                try:
+                    ticker = await self.exchange.fetch_ticker(symbol)
+                    exit_price = ticker['last']
+                except Exception:
+                    exit_price = position.entry_price
+            exit_price = float(exit_price)
 
-        if was_already_closed:
-            # Если позиция закрыта ДО команды бота (руками или по биржевому TP/SL),
-            # мы не знаем точной цены. Чтобы не рисовать огромный фейковый минус/плюс по текущему тикеру, 
-            # мы просто обнуляем последнюю "ногу", оставляя только то, что точно знаем (realized_pnl_usd).
-            leg_pnl = 0
-            logger.info(f"Сделка {symbol} закрыта извне. Используем сохраненный PnL: ${position.realized_pnl_usd:.2f}")
-        else:
             # FIX: считаем PnL от реальной маржи, без двойного учёта плеча
             if position.side == 'SHORT':
                 price_change_pct = ((position.entry_price - exit_price) / position.entry_price) * 100
@@ -1597,6 +1581,7 @@ class SmartMoneyBot:
 
             # Реальный PnL по марже
             leg_pnl = position.amount_usdt * (price_change_pct / 100.0) * position.leverage
+
             # Пропорционально частичному закрытию
             qty_ratio = qty_close / position.quantity if position.quantity > 0 else 1.0
             leg_pnl *= qty_ratio
@@ -1917,12 +1902,20 @@ class SmartMoneyBot:
 
                 if pnl_pct >= config.PARTIAL_TP3_PCT and not position.partial_tp3_done:
                     position.partial_tp3_done = True
-                    # Закрываем 50% остатка, остальное летит на Луну по трейлинг-стопу
-                    await self.close_partial_position(position, position.remaining_quantity * 0.50, current_price)
+                    # Закрываем 90%, оставляем 10% как "раннер" на случай мун-шота
+                    runner_qty = position.remaining_quantity * 0.10
+                    close_qty = position.remaining_quantity - runner_qty
+                    if close_qty > 0:
+                        await self.close_partial_position(position, close_qty, current_price)
                     await self.send_telegram_message(
                         f"💎 TP3 +{config.PARTIAL_TP3_PCT:.0f}% ROE | {pair}\n"
-                        f"Закрыто 50% остатка. Оставшаяся часть летит на Луну (Moonbag) 🚀!"
+                        f"Закрыто 90% позиции!\n"
+                        f"🎯 Оставлен раннер 10% с трейлинг-стопом"
                     )
+                    # Активируем трейлинг на остаток
+                    position.trailing_active = True
+                    position.trailing_peak = pnl_pct
+                    continue
 
                 # Динамический SL
                 await self.apply_dynamic_sl(position, price_change_pct, current_price)
@@ -2617,9 +2610,10 @@ class SmartMoneyBot:
                     real_pos = None
 
                 if not real_pos:
-                    # Позиции нет на бирже — закрываем в БД без торговли
-                    logger.info(f"Очистка: {symbol} нет на бирже, помечаем как CLOSED в БД")
-                    self.db.update_position(pos_row['id'], pos_row['entry_price'], 0, 0, 'CLOSED')
+                    # Позиции нет на бирже — помечаем как CLOSED БЕЗ записи PnL
+                    logger.info(f"Очистка: {symbol} нет на бирже, чистим из БД (не считаем как убыток)")
+                    # PnL=0, не влияет на статистику
+                    self.db.update_position(pos_row['id'], pos_row['entry_price'], 0, 0, 'CLEANED')
                     cleaned += 1
                     continue
 
