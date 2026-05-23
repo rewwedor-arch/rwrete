@@ -995,28 +995,35 @@ class SMCAnalyzer:
             if ob == 'BEARISH':
                 short_score += 1; short_ind['order_block'] = True
 
-            # ========== SCORING SYSTEM ==========
-            # Вход при score >= 3 из 8, НО строго по тренду EMA50!
-            MIN_SCORE_TO_TRADE = 3
+            # ========== INSTITUTIONAL ENTRY SYSTEM ==========
+            # Тренд (EMA50) + Структура (BOS/FVG/OB) + Моментум (MACD/RSI)
             is_uptrend = current_price > ema50[-1]
             is_downtrend = current_price < ema50[-1]
 
-            if is_uptrend and long_score >= MIN_SCORE_TO_TRADE and long_score >= short_score:
+            # Проверяем наличие СТРУКТУРНОГО подтверждения (SMC)
+            long_has_structure = long_ind.get('bos') or long_ind.get('fvg') or long_ind.get('order_block')
+            short_has_structure = short_ind.get('bos') or short_ind.get('fvg') or short_ind.get('order_block')
+
+            # Проверяем наличие МОМЕНТУМ подтверждения
+            long_has_momentum = long_ind.get('macd') or long_ind.get('rsi_momentum')
+            short_has_momentum = short_ind.get('macd') or short_ind.get('rsi_momentum')
+
+            if is_uptrend and long_has_structure and long_has_momentum and long_score >= 3:
                 result['signal'] = True
                 result['direction'] = 'LONG'
-                result['score'] = f"LONG_SCORE_{long_score}"
+                result['score'] = f"LONG_{long_score}"
                 result['indicators'] = long_ind
-                logger.info(f"📊 {symbol} LONG score={long_score} ind={long_ind}")
-            elif is_downtrend and short_score >= MIN_SCORE_TO_TRADE and short_score > long_score:
+                logger.info(f"✅ {symbol} LONG score={long_score} struct={long_has_structure} mom={long_has_momentum} ind={long_ind}")
+            elif is_downtrend and short_has_structure and short_has_momentum and short_score >= 3:
                 result['signal'] = True
                 result['direction'] = 'SHORT'
-                result['score'] = f"SHORT_SCORE_{short_score}"
+                result['score'] = f"SHORT_{short_score}"
                 result['indicators'] = short_ind
-                logger.info(f"📊 {symbol} SHORT score={short_score} ind={short_ind}")
+                logger.info(f"✅ {symbol} SHORT score={short_score} struct={short_has_structure} mom={short_has_momentum} ind={short_ind}")
             else:
                 result['signal'] = False
-                result['direction'] = potential_dir
-                result['score'] = f"LOW_L{long_score}_S{short_score}"
+                result['direction'] = 'LONG' if is_uptrend else 'SHORT'
+                result['score'] = f"SKIP_L{long_score}_S{short_score}"
                 result['indicators'] = {}
 
         except Exception as e:
@@ -2013,16 +2020,19 @@ class SmartMoneyBot:
 
     async def run_scanner_loop(self):
         last_update = datetime.now(timezone.utc)
+        self.scan_count = 0
         while self.is_running:
             try:
                 if (datetime.now(timezone.utc) - last_update).total_seconds() > 1800:
                     await self.update_top_symbols()
                     last_update = datetime.now(timezone.utc)
                 await self.scan_market()
-                await asyncio.sleep(10)
+                self.scan_count += 1
+                logger.info(f"🔄 Скан #{self.scan_count} завершён. Следующий через 15 сек...")
+                await asyncio.sleep(15)
             except Exception as e:
                 logger.error(f"Ошибка в цикле сканирования: {e}")
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(5)
 
     async def run_monitoring_loop(self):
         while self.is_running:
@@ -2094,7 +2104,8 @@ class SmartMoneyBot:
             f"📋 СТАТИСТИКА ДНЯ:\n"
             f"  Сделок: {today_trades} | ✅{today_wins} ❌{today_losses}\n"
             f"  Win Rate: {winrate:.0f}%\n\n"
-            f"🤖 Статус: {'🟢 РАБОТАЕТ' if self.is_running else '🔴 ОСТАНОВЛЕН'}\n"
+            f"🤖 Статус: {'🟢 ТОРГУЕТ' if ALLOW_TRADING else '🔴 ПАУЗА'}\n"
+            f"🔄 Сканирований: {getattr(self, 'scan_count', 0)}\n"
             f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
             f"SMART MONEY 1 BOT"
         )
@@ -2632,6 +2643,7 @@ class SmartMoneyBot:
             f"Пар для сканирования: {len(self.symbols_to_scan)}"
         )
 
+        # Все задачи работают бесконечно. Если одна упадёт — остальные НЕ умирают.
         tasks = [
             asyncio.create_task(task_with_log("scanner", self.run_scanner_loop())),
             asyncio.create_task(task_with_log("monitoring", self.run_monitoring_loop())),
@@ -2642,19 +2654,14 @@ class SmartMoneyBot:
             asyncio.create_task(task_with_log("trailing_stop", trailing_stop_loop(self)))
         ]
 
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        for task in done:
-            try:
-                task.result()
-            except Exception as e:
-                logger.error(f"Одна из задач упала с ошибкой: {e}")
+        # gather с return_exceptions=True: если задача упадёт, остальные продолжают!
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Задача {i} упала: {result}")
         
-        logger.error("Задача завершилась. Отменяем остальные...")
-        for task in pending:
-            task.cancel()
-        await asyncio.gather(*pending, return_exceptions=True)
-        
-        await asyncio.sleep(0.5)
+        logger.error("Все задачи завершились. Бот перезапускается...")
+        await asyncio.sleep(2)
         return False
 
     async def stop(self):
