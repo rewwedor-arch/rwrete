@@ -2391,10 +2391,17 @@ class SmartMoneyBot:
             await self._safe_reply(update, f"Ошибка статистики: {e}")
 
     async def cmd_stop_trading(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self.is_running:
-            await self._safe_reply(update, "🔴 Бот уже остановлен!")
+        global ALLOW_TRADING
+        if not ALLOW_TRADING:
+            await self._safe_reply(update, "🔴 Торговля уже остановлена!")
             return
-        self.is_running = False
+        ALLOW_TRADING = False
+        try:
+            import os
+            with open('.bot_stopped', 'w') as f:
+                f.write('stopped')
+        except: pass
+        
         closed_count, kept_count = 0, 0
         for pid, pos in list(self.positions.items()):
             try:
@@ -2418,21 +2425,33 @@ class SmartMoneyBot:
         )
 
     async def cmd_start_bot(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if self.is_running:
+        global ALLOW_TRADING
+        if ALLOW_TRADING:
             await self._safe_reply(update, "🟢 Бот уже работает!")
             return
-        self.is_running = True
-        await self._safe_reply(update, "🟢 БОТ ВКЛЮЧЁН! Сканирование возобновлено.")
+        ALLOW_TRADING = True
+        try:
+            import os
+            if os.path.exists('.bot_stopped'):
+                os.remove('.bot_stopped')
+        except: pass
+        await self._safe_reply(update, "🟢 БОТ ВКЛЮЧЁН! Новые сделки разрешены.")
 
     async def cmd_stop_bot(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self.is_running:
+        global ALLOW_TRADING
+        if not ALLOW_TRADING:
             await self._safe_reply(update, "🔴 Бот уже остановлен!")
             return
-        self.is_running = False
+        ALLOW_TRADING = False
+        try:
+            import os
+            with open('.bot_stopped', 'w') as f:
+                f.write('stopped')
+        except: pass
         await self._safe_reply(update,
-            "🔴 БОТ ВЫКЛЮЧЕН!\n"
+            "🔴 БОТ ПРИОСТАНОВЛЕН!\n"
             "Новые сделки не открываются.\n"
-            "Открытые позиции на месте.\n"
+            "Открытые позиции продолжают управляться (SL/TP).\n"
             "/close_all — закрыть все"
         )
 

@@ -48,6 +48,11 @@ async def run_bot_with_restart():
     
     while True:
         try:
+            if os.path.exists('.bot_stopped'):
+                logger.info("Bot is paused by user. Waiting...")
+                await asyncio.sleep(10)
+                continue
+
             bot = SmartMoneyBot(
                 api_key=os.getenv('BINANCE_API_KEY', ''),
                 api_secret=os.getenv('BINANCE_SECRET', '') or os.getenv('BINANCE_API_SECRET', ''),
@@ -58,6 +63,9 @@ async def run_bot_with_restart():
             )
             started = await bot.start()
             if not started:
+                if os.path.exists('.bot_stopped'):
+                    logger.info("Bot stopped by user command.")
+                    continue
                 logger.error("Bot failed to start. Retrying in 60 sec...")
                 await asyncio.sleep(60)
                 continue
