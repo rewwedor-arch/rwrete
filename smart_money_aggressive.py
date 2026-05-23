@@ -217,14 +217,14 @@ class SmartTrailingMixin:
 """
 Smart Money Aggressive Trading Bot — ИСПРАВЛЕННАЯ ВЕРСИЯ
 Патч-лист:
-1. SL реально выставляется на бирже (был pass)
-2. STOP_LOSS_PCT = 1.5% (был 0.25% — выбивало на шуме)
-3. Фильтр волатильности перед входом
-4. Часовой отчёт (run_hourly_report_loop) — период 3600 сек вместо 1800
-5. Telegram команды /report1h /report5h /report24h работают без update.message.reply_text crash
-6. Trailing stop loop исправлен: SHORT SL движется правильно
-7. Программный SL согласован с биржевым (не дублирует)
-8. Частичные TP пересчитаны на адекватные уровни
+  1. SL реально выставляется на бирже (был pass)
+  2. STOP_LOSS_PCT = 1.5% (был 0.25% — выбивало на шуме)
+  3. Фильтр волатильности перед входом
+  4. Часовой отчёт (run_hourly_report_loop) — период 3600 сек вместо 1800
+  5. Telegram команды /report1h /report5h /report24h работают без update.message.reply_text crash
+  6. Trailing stop loop исправлен: SHORT SL движется правильно
+  7. Программный SL согласован с биржевым (не дублирует)
+  8. Частичные TP пересчитаны на адекватные уровни
 """
 
 import asyncio
@@ -269,7 +269,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def task_with_log(task_name: str, coro):
+    async def task_with_log(task_name: str, coro):
     try:
         logger.info(f"🚀 Запуск задачи: {task_name}")
         result = await coro
@@ -353,7 +353,7 @@ config = StrategyConfig()
 ALLOW_TRADING = True
 
 
-async def check_fear_greed_index(bot: 'SmartMoneyBot'):
+    async def check_fear_greed_index(bot: 'SmartMoneyBot'):
     global ALLOW_TRADING
     import aiohttp as _aiohttp
 
@@ -386,7 +386,7 @@ async def check_fear_greed_index(bot: 'SmartMoneyBot'):
         await asyncio.sleep(14400)
 
 
-async def trailing_stop_loop(bot: 'SmartMoneyBot'):
+    async def trailing_stop_loop(bot: 'SmartMoneyBot'):
     """Фоновый трейлинг-стоп каждые 10 секунд"""
     while bot.is_running:
         try:
@@ -561,18 +561,18 @@ class Database:
         logger.info("База данных инициализирована")
 
     def add_position(self, symbol, side, entry_price, stop_loss, take_profit,
-                    amount_usdt, leverage, quantity, smc_score, bos_info,
-                    fvg_detected, rsi_value, adx_value) -> int:
+                     amount_usdt, leverage, quantity, smc_score, bos_info,
+                     fvg_detected, rsi_value, adx_value) -> int:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute('''
             INSERT INTO positions (symbol, side, entry_price, stop_loss, take_profit,
-                                amount_usdt, leverage, quantity, smc_score, bos_info,
-                                fvg_detected, rsi_value, adx_value)
+                                   amount_usdt, leverage, quantity, smc_score, bos_info,
+                                   fvg_detected, rsi_value, adx_value)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (symbol, side, entry_price, stop_loss, take_profit,
-            amount_usdt, leverage, quantity, smc_score, bos_info,
-            1 if fvg_detected else 0, rsi_value, adx_value))
+              amount_usdt, leverage, quantity, smc_score, bos_info,
+              1 if fvg_detected else 0, rsi_value, adx_value))
         position_id = cursor.lastrowid
         conn.commit()
         conn.close()
@@ -686,7 +686,7 @@ class Database:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute('INSERT INTO alerts (position_id, alert_type, message) VALUES (?, ?, ?)',
-                    (position_id, alert_type, message))
+                       (position_id, alert_type, message))
         conn.commit()
         conn.close()
 
@@ -708,9 +708,9 @@ class Database:
         row = cursor.fetchone()
         cursor.execute('''
             SELECT COUNT(*) as total_days,
-                SUM(CASE WHEN total_pnl > 0 THEN 1 ELSE 0 END) as profitable_days,
-                SUM(CASE WHEN total_pnl < 0 THEN 1 ELSE 0 END) as losing_days,
-                AVG(total_pnl_pct) as avg_daily_pct
+                   SUM(CASE WHEN total_pnl > 0 THEN 1 ELSE 0 END) as profitable_days,
+                   SUM(CASE WHEN total_pnl < 0 THEN 1 ELSE 0 END) as losing_days,
+                   AVG(total_pnl_pct) as avg_daily_pct
             FROM statistics
         ''')
         days_row = cursor.fetchone()
@@ -1060,7 +1060,7 @@ class Position:
 class SmartMoneyBot:
 
     def __init__(self, api_key, api_secret, telegram_token,
-                telegram_chat_id, user_chat_id=None, testnet=False):
+                 telegram_chat_id, user_chat_id=None, testnet=False):
         self.api_key = api_key
         self.api_secret = api_secret
         self.telegram_token = telegram_token
@@ -1223,7 +1223,7 @@ class SmartMoneyBot:
             logger.error(f"Ошибка установки плеча: {e}")
             return 5
 
-async def calculate_position_size(self, entry_price, score=5) -> tuple:
+    async def calculate_position_size(self, entry_price, score=5) -> tuple:
         try:
             balance = await self.exchange.fetch_balance()
 
@@ -1869,7 +1869,7 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
             return
 
         is_better_sl = (new_sl_price < position.stop_loss) if position.side == 'SHORT' else \
-                    (new_sl_price > position.stop_loss)
+                       (new_sl_price > position.stop_loss)
         if not is_better_sl:
             return
 
@@ -1941,7 +1941,7 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
                         pnl_pct = (est_pnl / margin * 100) if margin > 0 else 0
                         self.db.update_position(position_id, exit_price, est_pnl, pnl_pct)
                         self.db.update_daily_statistics(est_pnl, pnl_pct, count_as_trade=True,
-                                                    equity_reference=config.DEPOSIT)
+                                                       equity_reference=config.DEPOSIT)
                         emoji = "✅" if est_pnl >= 0 else "❌"
                         await self.send_telegram_message(
                             f"{emoji} СИНХРОНИЗАЦИЯ | {position.symbol.replace('/USDT', '')}\n"
@@ -2834,7 +2834,7 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
 # ТОЧКА ВХОДА
 # ============================================================================
 
-def _env_secret(*names: str) -> str:
+    def _env_secret(*names: str) -> str:
     for n in names:
         raw = os.getenv(n)
         if raw is None:
@@ -2845,7 +2845,7 @@ def _env_secret(*names: str) -> str:
     return ''
 
 
-async def main():
+    async def main():
     from dotenv import load_dotenv
     _root = Path(__file__).resolve().parent
     load_dotenv(_root / '.env')
@@ -2897,7 +2897,7 @@ if __name__ == '__main__':
     asyncio.run(main())
 
 
-def calculate_signal_strength(adx, volume_ratio, ema_trend, macd_ok):
+    def calculate_signal_strength(adx, volume_ratio, ema_trend, macd_ok):
     score = 0
 
     if adx >= 20:
@@ -2923,7 +2923,7 @@ ENABLE_ORDER_BLOCKS = True
 ENABLE_VOLUME_CONFIRMATION = True
 ENABLE_HTF_CONFIRMATION = True
 
-def ultra_signal_filter(adx, rsi, volume_ratio, ema_trend, macd_ok, bos, fvg):
+    def ultra_signal_filter(adx, rsi, volume_ratio, ema_trend, macd_ok, bos, fvg):
     """Упрощенный фильтр:
     EMA + BOS + Volume + умеренный ADX
     Без переоптимизации и поздних входов
@@ -2950,7 +2950,7 @@ TRAILING_AFTER = 4.0
 
 print("🧠 TITAN SMART MONEY MODE ENABLED")
 
-def format_signal(symbol, entry, tp1, tp2, tp3, sl, rr, leverage):
+    def format_signal(symbol, entry, tp1, tp2, tp3, sl, rr, leverage):
     return f"""
 🔔 SMART MONEY SIGNAL
 
@@ -2982,7 +2982,7 @@ def format_signal(symbol, entry, tp1, tp2, tp3, sl, rr, leverage):
 # ===== ADAPTIVE SIGNAL ENGINE =====
 ENABLE_ADAPTIVE_SIGNALS = True
 
-def adaptive_signal_engine(
+    def adaptive_signal_engine(
     adx,
     rsi,
     volume_ratio,
@@ -3023,7 +3023,7 @@ print("📡 REALTIME SCANNING ACTIVE")
 print("🧠 BALANCED SMART MONEY MODE")
 
 
-def safe_format_signal(symbol, entry=None, tp1=None, tp2=None, tp3=None, sl=None):
+    def safe_format_signal(symbol, entry=None, tp1=None, tp2=None, tp3=None, sl=None):
     try:
         return f"""
 🔔 SMART MONEY SIGNAL
@@ -3044,7 +3044,7 @@ if __name__ == "__main__":
     print("🚀 SMART MONEY BOT STARTED")
 
 
-async def safe_hourly_report():
+    async def safe_hourly_report():
     global LAST_HOURLY_REPORT
     import time
 
@@ -3065,7 +3065,7 @@ async def safe_hourly_report():
 
 _last_report_hour = None
 
-async def controlled_hourly_report():
+    async def controlled_hourly_report():
     global _last_report_hour
 
     now = time.localtime()
@@ -3088,7 +3088,7 @@ async def controlled_hourly_report():
         print(f"❌ Hourly report failed: {e}")
 
 # ===== TP3 RUNNER LOGIC =====
-async def runner_take_profit(current_roe, last_runner_tp=0):
+    async def runner_take_profit(current_roe, last_runner_tp=0):
     if not RUNNER_MODE:
         return 0
 
