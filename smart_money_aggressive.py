@@ -30,7 +30,7 @@ RUNNER_CLOSE_PERCENT = 10
 # ===== BINANCE DYNAMIC LEVERAGE =====
 async def get_max_leverage(exchange, symbol):
     try:
-        markets = exchange.load_markets()
+        markets = await exchange.load_markets()
         market = markets.get(symbol)
 
         if market and 'limits' in market:
@@ -51,11 +51,11 @@ async def get_max_leverage(exchange, symbol):
                 if 'maxLeverage' in first_tier:
                     return int(first_tier['maxLeverage'])
 
-        return 20
+        return 125
 
     except Exception as e:
         print(f"Max leverage fetch error for {symbol}: {e}")
-        return 20
+        return 125
 
 
 
@@ -1347,6 +1347,15 @@ class SmartMoneyBot:
                 logger.info(f"Сигнал {symbol} пойман, торговля приостановлена")
                 return None
             try:
+                # ── ЗАЩИТА ОТ СПАМА ОРДЕРАМИ И ПЕРЕГРУЗКИ ЛИМИТОВ ──
+                if len(self.positions) >= MAX_OPEN_POSITIONS:
+                    logger.info(f"Достигнут лимит открытых позиций ({MAX_OPEN_POSITIONS}). Пропускаем {symbol}.")
+                    return None
+                    
+                if symbol in [p.symbol for p in self.positions.values()]:
+                    logger.info(f"Позиция для {symbol} уже открыта. Пропускаем дублирующий сигнал.")
+                    return None
+
                 direction = smc_result.get('direction', 'LONG')
                 market_info = self.exchange.market(symbol)
                 min_notional = float(market_info.get('limits', {}).get('cost', {}).get('min', 5))
@@ -1409,8 +1418,8 @@ class SmartMoneyBot:
                     # Если биржа отклонила ордер из-за лимитов плеча/размера
                     if '-2027' in err_str or 'Exceeded' in err_str or 'Margin is insufficient' in err_str or '-2019' in err_str:
                         order_success = False
-                        # Пробуем ступеньками снижать плечо
-                        for new_lev in [20, 10, 5, 3, 2, 1]:
+                        # Пробуем ступеньками снижать плечо, начиная с самых высоких
+                        for new_lev in [125, 100, 75, 50, 40, 30, 25, 20, 15, 10, 5, 3, 2, 1]:
                             if new_lev >= actual_leverage:
                                 continue  # Пробуем только плечи МЕНЬШЕ текущего
                             try:
