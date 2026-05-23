@@ -1322,25 +1322,41 @@ class SmartMoneyBot:
                     err_str = str(e)
                     if '-2015' in err_str or 'Invalid API-key' in err_str:
                         raise
-                    if '-2027' in err_str or 'Exceeded' in err_str:
-                        # Если биржа отклонила плечо — уменьшаем автоматически
+                    
+                    # Если биржа отклонила ордер из-за лимитов плеча/размера
+                    if '-2027' in err_str or 'Exceeded' in err_str or 'Margin is insufficient' in err_str or '-2019' in err_str:
+                        order_success = False
+                        # Пробуем ступеньками снижать плечо
                         for new_lev in [20, 10, 5, 3, 2, 1]:
+                            if new_lev >= actual_leverage:
+                                continue  # Пробуем только плечи МЕНЬШЕ текущего
                             try:
-                            
-                                max_allowed_leverage = await get_max_leverage(self.exchange, symbol)
-                                actual_leverage = min(config.LEVERAGE, max_allowed_leverage)
-                                await self.exchange.set_leverage(actual_leverage, symbol)
-                                logger.info(f"Dynamic leverage for {symbol}: x{actual_leverage}")
-
+                                await self.exchange.set_leverage(new_lev, symbol)
                                 actual_leverage = new_lev
-                                logger.info(f"Emergency leverage fallback for {symbol}: x{new_lev}")
-                                break
-                            except Exception:
+                                logger.info(f"🚨 Emergency leverage fallback for {symbol}: x{new_lev}")
+                                
+                                # Пересчитываем quantity под новое плечо, сохраняя вложенную маржу (amount_usdt)
+                                notional = margin * actual_leverage
+                                if notional < min_notional:
+                                    logger.warning(f"Номинал ${notional:.2f} меньше минимального ${min_notional} при x{actual_leverage}. Пропускаем {symbol}.")
+                                    break
+                                    
+                                quantity = float(self.exchange.amount_to_precision(symbol, notional / entry_price))
+                                
+                                if direction == 'SHORT':
+                                    order = await self.exchange.create_market_sell_order(symbol, quantity)
+                                else:
+                                    order = await self.exchange.create_market_buy_order(symbol, quantity)
+                                
+                                order_success = True
+                                break # Успешно открыли!
+                            except Exception as fallback_e:
+                                logger.debug(f"Fallback x{new_lev} failed: {fallback_e}")
                                 continue
-                        if direction == 'SHORT':
-                            order = await self.exchange.create_market_sell_order(symbol, quantity)
-                        else:
-                            order = await self.exchange.create_market_buy_order(symbol, quantity)
+                                
+                        if not order_success:
+                            logger.error(f"❌ Не удалось открыть {symbol} даже после снижения плеча.")
+                            raise Exception("Fallback exhausted or notional too small")
                     else:
                         raise
 
