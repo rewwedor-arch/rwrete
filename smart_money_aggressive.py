@@ -4,7 +4,6 @@ BTC_TREND_FILTER = True
 HIGH_TIMEFRAME_CONFIRMATION = True
 
 
-
 # ===== EXTRA MON PROTECTION =====
 def is_blacklisted_symbol(symbol):
     s = symbol.upper()
@@ -58,7 +57,6 @@ async def get_max_leverage(exchange, symbol):
         return 20
 
 
-
 # ===== SINGLE INSTANCE PROTECTION =====
 import os
 
@@ -72,7 +70,6 @@ try:
             f.write("running")
 except Exception:
     pass
-
 
 
 # ===== SAFE LEVERAGE FIX =====
@@ -96,7 +93,6 @@ def get_safe_leverage(symbol, requested_leverage=75):
 
     except Exception:
         return 20
-
 
 
 # ===== REPORT COOLDOWN =====
@@ -160,10 +156,6 @@ def institutional_filter(
     return score >= 6
 
 
-
-
-
-
 # ===== WEAK SIGNAL BLOCKER =====
 def reject_weak_sm_signal(sm_score):
     if sm_score < 5:
@@ -225,14 +217,14 @@ class SmartTrailingMixin:
 """
 Smart Money Aggressive Trading Bot — ИСПРАВЛЕННАЯ ВЕРСИЯ
 Патч-лист:
-  1. SL реально выставляется на бирже (был pass)
-  2. STOP_LOSS_PCT = 1.5% (был 0.25% — выбивало на шуме)
-  3. Фильтр волатильности перед входом
-  4. Часовой отчёт (run_hourly_report_loop) — период 3600 сек вместо 1800
-  5. Telegram команды /report1h /report5h /report24h работают без update.message.reply_text crash
-  6. Trailing stop loop исправлен: SHORT SL движется правильно
-  7. Программный SL согласован с биржевым (не дублирует)
-  8. Частичные TP пересчитаны на адекватные уровни
+1. SL реально выставляется на бирже (был pass)
+2. STOP_LOSS_PCT = 1.5% (был 0.25% — выбивало на шуме)
+3. Фильтр волатильности перед входом
+4. Часовой отчёт (run_hourly_report_loop) — период 3600 сек вместо 1800
+5. Telegram команды /report1h /report5h /report24h работают без update.message.reply_text crash
+6. Trailing stop loop исправлен: SHORT SL движется правильно
+7. Программный SL согласован с биржевым (не дублирует)
+8. Частичные TP пересчитаны на адекватные уровни
 """
 
 import asyncio
@@ -569,18 +561,18 @@ class Database:
         logger.info("База данных инициализирована")
 
     def add_position(self, symbol, side, entry_price, stop_loss, take_profit,
-                     amount_usdt, leverage, quantity, smc_score, bos_info,
-                     fvg_detected, rsi_value, adx_value) -> int:
+                    amount_usdt, leverage, quantity, smc_score, bos_info,
+                    fvg_detected, rsi_value, adx_value) -> int:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute('''
             INSERT INTO positions (symbol, side, entry_price, stop_loss, take_profit,
-                                   amount_usdt, leverage, quantity, smc_score, bos_info,
-                                   fvg_detected, rsi_value, adx_value)
+                                amount_usdt, leverage, quantity, smc_score, bos_info,
+                                fvg_detected, rsi_value, adx_value)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (symbol, side, entry_price, stop_loss, take_profit,
-              amount_usdt, leverage, quantity, smc_score, bos_info,
-              1 if fvg_detected else 0, rsi_value, adx_value))
+            amount_usdt, leverage, quantity, smc_score, bos_info,
+            1 if fvg_detected else 0, rsi_value, adx_value))
         position_id = cursor.lastrowid
         conn.commit()
         conn.close()
@@ -694,7 +686,7 @@ class Database:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute('INSERT INTO alerts (position_id, alert_type, message) VALUES (?, ?, ?)',
-                       (position_id, alert_type, message))
+                    (position_id, alert_type, message))
         conn.commit()
         conn.close()
 
@@ -716,9 +708,9 @@ class Database:
         row = cursor.fetchone()
         cursor.execute('''
             SELECT COUNT(*) as total_days,
-                   SUM(CASE WHEN total_pnl > 0 THEN 1 ELSE 0 END) as profitable_days,
-                   SUM(CASE WHEN total_pnl < 0 THEN 1 ELSE 0 END) as losing_days,
-                   AVG(total_pnl_pct) as avg_daily_pct
+                SUM(CASE WHEN total_pnl > 0 THEN 1 ELSE 0 END) as profitable_days,
+                SUM(CASE WHEN total_pnl < 0 THEN 1 ELSE 0 END) as losing_days,
+                AVG(total_pnl_pct) as avg_daily_pct
             FROM statistics
         ''')
         days_row = cursor.fetchone()
@@ -873,7 +865,7 @@ class SMCAnalyzer:
             # Bullish FVG: gap between candle 1 high and candle 3 low
             if low3 > high1:
                 return 'BULLISH'
-            # Bearish FVG: gap between candle 1 low and candle 3 high  
+            # Bearish FVG: gap between candle 1 low and candle 3 high
             if high3 < low1:
                 return 'BEARISH'
         return ''
@@ -1068,7 +1060,7 @@ class Position:
 class SmartMoneyBot:
 
     def __init__(self, api_key, api_secret, telegram_token,
-                 telegram_chat_id, user_chat_id=None, testnet=False):
+                telegram_chat_id, user_chat_id=None, testnet=False):
         self.api_key = api_key
         self.api_secret = api_secret
         self.telegram_token = telegram_token
@@ -1197,7 +1189,7 @@ class SmartMoneyBot:
     def compute_optimal_slots(self, virtual_equity: float) -> int:
         return 5  # Бот сам распределяет капитал по силе сигналов
 
-    
+
     async def get_safe_leverage(self, symbol):
         try:
             max_leverage = await self.get_safe_leverage(symbol) if hasattr(self, "get_safe_leverage") else config.LEVERAGE
@@ -1355,7 +1347,7 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
     # ОТКРЫТИЕ ПОЗИЦИИ — ИСПРАВЛЕН SL
     # ────────────────────────────────────────────────────────────────────────
 
-    
+
     def _normalize_order_price(self, symbol, price, side):
         """
         Binance futures PERCENT_PRICE protection fix.
@@ -1403,7 +1395,7 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
                     pass
                 actual_leverage = config.LEVERAGE
                 try:
-                
+
                     max_allowed_leverage = await get_max_leverage(self.exchange, symbol)
                     actual_leverage = min(config.LEVERAGE, max_allowed_leverage)
                     await self.exchange.set_leverage(actual_leverage, symbol)
@@ -1432,7 +1424,7 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
                     err_str = str(e)
                     if '-2015' in err_str or 'Invalid API-key' in err_str:
                         raise
-                    
+
                     # Если биржа отклонила ордер из-за лимитов плеча/размера
                     if '-2027' in err_str or 'Exceeded' in err_str or 'Margin is insufficient' in err_str or '-2019' in err_str:
                         order_success = False
@@ -1444,33 +1436,33 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
                                 await self.exchange.set_leverage(new_lev, symbol)
                                 actual_leverage = new_lev
                                 logger.info(f"🚨 Emergency leverage fallback for {symbol}: x{new_lev}")
-                                
+
                                 # Пересчитываем quantity под новое плечо, сохраняя вложенную маржу (amount_usdt)
                                 notional = margin * actual_leverage
                                 if notional < min_notional:
                                     logger.warning(f"Номинал ${notional:.2f} меньше минимального ${min_notional} при x{actual_leverage}. Пропускаем {symbol}.")
                                     break
-                                    
+
                                 quantity = float(self.exchange.amount_to_precision(symbol, notional / entry_price))
-                                
+
                                 if direction == 'SHORT':
                                     order = await self.exchange.create_market_sell_order(symbol, quantity)
                                 else:
                                     order = await self.exchange.create_market_buy_order(symbol, quantity)
-                                
+
                                 order_success = True
                                 break # Успешно открыли!
                             except Exception as fallback_e:
                                 logger.debug(f"Fallback x{new_lev} failed: {fallback_e}")
                                 continue
-                                
+
                         if not order_success:
                             logger.error(f"❌ Не удалось открыть {symbol} даже после снижения плеча.")
                             raise Exception("Fallback exhausted or notional too small")
                     else:
                         raise
 
-            
+
                 # Финальная защита от invalid leverage
                 if actual_leverage < 1:
                     actual_leverage = 1
@@ -1798,7 +1790,7 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
         try:
             # СТРОГО форматируем количество, иначе Binance выдаст ошибку точности (Precision/Invalid amount)
             qty_to_close = float(self.exchange.amount_to_precision(symbol, qty_to_close))
-            
+
             if qty_to_close <= 0:
                 return False
 
@@ -1806,18 +1798,18 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
                 order = await self.exchange.create_market_buy_order(symbol, qty_to_close, params={"reduceOnly": True})
             else:
                 order = await self.exchange.create_market_sell_order(symbol, qty_to_close, params={"reduceOnly": True})
-            
+
             exit_price = order.get('average') or order.get('price') or current_price
             exit_price = float(exit_price)
-            
+
             # Считаем PnL этой части
             if position.side == 'SHORT':
                 price_change_pct = ((position.entry_price - exit_price) / position.entry_price) * 100
             else:
                 price_change_pct = ((exit_price - position.entry_price) / position.entry_price) * 100
-                
+
             leg_pnl = position.amount_usdt * (price_change_pct / 100.0) * position.leverage * (qty_to_close / position.quantity)
-            
+
             # Обновляем состояние позиции в памяти
             position.remaining_quantity -= qty_to_close
             position.realized_pnl_usd += leg_pnl
@@ -1843,7 +1835,6 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
                 closed_count += 1
             await asyncio.sleep(0.5)
         await self.send_telegram_message(f"✅ Закрыто: {closed_count}/{len(position_ids)}")
-
 
 
     async def apply_dynamic_sl(self, position: Position, price_change_pct: float, current_price: float):
@@ -1878,7 +1869,7 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
             return
 
         is_better_sl = (new_sl_price < position.stop_loss) if position.side == 'SHORT' else \
-                       (new_sl_price > position.stop_loss)
+                    (new_sl_price > position.stop_loss)
         if not is_better_sl:
             return
 
@@ -1929,7 +1920,7 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
                 # Синхронизация с биржей, проверяем жива ли позиция
                 positions_now = await self.exchange.fetch_positions([position.symbol])
                 active_pos = next((p for p in positions_now if abs(float(p.get('contracts', 0) or 0)) > 0), None)
-                
+
                 if not active_pos:
                     # Позиция закрыта на бирже (SL/TP сработал) — чистим БЕЗ торговли
                     logger.info(f"Синхронизация: {position.symbol} уже закрыта на бирже. Чистим из бота.")
@@ -1937,7 +1928,7 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
                         await self.exchange.cancel_all_orders(position.symbol)
                     except Exception as cancel_err:
                         logger.warning(f"Ошибка отмены ордеров при синхронизации {position.symbol}: {cancel_err}")
-                        
+
                     try:
                         ticker = await self.exchange.fetch_ticker(position.symbol)
                         exit_price = ticker['last']
@@ -1950,7 +1941,7 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
                         pnl_pct = (est_pnl / margin * 100) if margin > 0 else 0
                         self.db.update_position(position_id, exit_price, est_pnl, pnl_pct)
                         self.db.update_daily_statistics(est_pnl, pnl_pct, count_as_trade=True,
-                                                       equity_reference=config.DEPOSIT)
+                                                    equity_reference=config.DEPOSIT)
                         emoji = "✅" if est_pnl >= 0 else "❌"
                         await self.send_telegram_message(
                             f"{emoji} СИНХРОНИЗАЦИЯ | {position.symbol.replace('/USDT', '')}\n"
@@ -2107,7 +2098,7 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
     # СКАНЕР РЫНКА
     # ────────────────────────────────────────────────────────────────────────
 
-    
+
     async def is_sideways_market(self, symbol: str) -> bool:
         """Фильтр боковика"""
         try:
@@ -2227,7 +2218,7 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
                     price_change_pct = ((pos.entry_price - current_price) / pos.entry_price) * 100
                 else:
                     price_change_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100
-                
+
                 qty_ratio = rem / pos.quantity if pos.quantity > 0 else 1.0
                 pnl = pos.realized_pnl_usd + (pos.amount_usdt * (price_change_pct / 100.0) * pos.leverage * qty_ratio)
                 pnl_pct = price_change_pct * pos.leverage
@@ -2448,7 +2439,7 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
                     price_change_pct = ((pos.entry_price - current_price) / pos.entry_price) * 100
                 else:
                     price_change_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100
-                
+
                 qty_ratio = rem / pos.quantity if pos.quantity > 0 else 1.0
                 pnl = pos.realized_pnl_usd + (pos.amount_usdt * (price_change_pct / 100.0) * pos.leverage * qty_ratio)
                 pnl_pct = price_change_pct * pos.leverage
@@ -2579,7 +2570,7 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
             with open('.bot_stopped', 'w') as f:
                 f.write('stopped')
         except: pass
-        
+
         closed_count, kept_count = 0, 0
         for pid, pos in list(self.positions.items()):
             try:
@@ -2781,7 +2772,7 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
                         ts = datetime.now(timezone.utc)
                 except:
                     ts = datetime.now(timezone.utc)
-                
+
                 pos = Position(
                     id=pos_row['id'], symbol=symbol, side=pos_row['side'],
                     entry_price=pos_row['entry_price'], stop_loss=pos_row['stop_loss'],
@@ -2820,7 +2811,7 @@ async def calculate_position_size(self, entry_price, score=5) -> tuple:
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 logger.error(f"Задача {i} упала: {result}")
-        
+
         logger.error("Все задачи завершились. Бот перезапускается...")
         await asyncio.sleep(2)
         return False
@@ -2904,11 +2895,6 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
-
-
-
-
-
 
 
 def calculate_signal_strength(adx, volume_ratio, ema_trend, macd_ok):
