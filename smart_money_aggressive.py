@@ -1833,27 +1833,27 @@ class SmartMoneyBot:
         new_sl_price = None
         new_level = position.dynamic_sl_level
 
-        # Пороги для агрессивного скальпинга: молниеносный безубыток
-        if price_change_pct >= 0.8 and position.dynamic_sl_level < 3:
-            # +60% ROE — SL в плюс
+        # Пороги для агрессивного скальпинга (исправленные, чтобы не душить сделку)
+        if price_change_pct >= 1.0 and position.dynamic_sl_level < 3:
+            # +75% ROE — мощный профит обеспечен
             if position.side == 'SHORT':
                 new_sl_price = position.entry_price * (1 - 0.005)
             else:
                 new_sl_price = position.entry_price * (1 + 0.005)
             new_level = 3
-        elif price_change_pct >= 0.4 and position.dynamic_sl_level < 2:
-            # +30% ROE — SL на безубыток
+        elif price_change_pct >= 0.6 and position.dynamic_sl_level < 2:
+            # +45% ROE — фиксируем плюсовой стоп
             if position.side == 'SHORT':
-                new_sl_price = position.entry_price * (1 - 0.001)
+                new_sl_price = position.entry_price * (1 - 0.002)
             else:
-                new_sl_price = position.entry_price * (1 + 0.001)
+                new_sl_price = position.entry_price * (1 + 0.002)
             new_level = 2
-        elif price_change_pct >= 0.15 and position.dynamic_sl_level < 1:
-            # +11% ROE — подтягиваем SL ближе к входу
+        elif price_change_pct >= 0.4 and position.dynamic_sl_level < 1:
+            # +30% ROE — перевод в безубыток
             if position.side == 'SHORT':
-                new_sl_price = position.entry_price * (1 + 0.003)  # Сжать стоп
+                new_sl_price = position.entry_price * (1 - 0.0005)
             else:
-                new_sl_price = position.entry_price * (1 - 0.003)
+                new_sl_price = position.entry_price * (1 + 0.0005)
             new_level = 1
 
         if not new_sl_price:
@@ -2200,7 +2200,7 @@ class SmartMoneyBot:
         positions_info = ""
         total_open_pnl = 0.0
 
-        for pid, pos in self.positions.items():
+        for pid, pos in list(self.positions.items()):
             try:
                 ticker = await self.exchange.fetch_ticker(pos.symbol)
                 current_price = ticker['last']
@@ -2421,7 +2421,7 @@ class SmartMoneyBot:
             await self._safe_reply(update, "📋 Нет открытых позиций")
             return
         messages = []
-        for pid, pos in self.positions.items():
+        for pid, pos in list(self.positions.items()):
             try:
                 ticker = await self.exchange.fetch_ticker(pos.symbol)
                 current_price = ticker['last']
