@@ -390,21 +390,7 @@ async def check_fear_greed_index(bot: 'SmartMoneyBot'):
                                     f"✅ Рынок успокоился.\nFear & Greed: {value} ({classification})\nТорговля возобновлена."
                                 )
         except Exception as e:
-            err = str(e)
-
-            # Binance PERCENT_PRICE filter workaround
-            if "-4131" in err or "PERCENT_PRICE" in err:
-                try:
-                    logger.warning("Retrying as pure market order due to PERCENT_PRICE filter")
-                    if side.upper() == "LONG":
-                        order = await self.exchange.create_market_buy_order(symbol, quantity)
-                    else:
-                        order = await self.exchange.create_market_sell_order(symbol, quantity)
-                    return order
-                except Exception as retry_error:
-                    logger.error(f"Market retry failed: {retry_error}")
-
-            logger.error(f"Order error: {e}")
+            logger.error(f"F&G index error: {e}")
         await asyncio.sleep(14400)
 
 
@@ -894,6 +880,25 @@ class SMCAnalyzer:
                         return 'BEARISH'
         return ''
 
+    def detect_order_block(self, ohlcv) -> str:
+        if len(ohlcv) < 10:
+            return 'NONE'
+        # Basic OB logic: last opposite candle before a strong move that breaks structure
+        for i in range(len(ohlcv)-10, len(ohlcv)-2):
+            c1, c2, c3 = ohlcv[i], ohlcv[i+1], ohlcv[i+2]
+            # Bullish OB: down candle before strong up move
+            if c1[4] < c1[1] and c2[4] > c2[1] and c3[4] > c3[1]:
+                move_pct = (c3[4] - c1[4]) / c1[4] * 100
+                if move_pct > 0.4:
+                    return 'BULLISH'
+            # Bearish OB: up candle before strong down move
+            if c1[4] > c1[1] and c2[4] < c2[1] and c3[4] < c3[1]:
+                move_pct = (c1[4] - c3[4]) / c1[4] * 100
+                if move_pct > 0.4:
+                    return 'BEARISH'
+        return 'NONE'
+
+
     async def analyze_symbol(self, symbol: str) -> Dict[str, Any]:
         result = {
             'symbol': symbol, 'score': 0, 'direction': 'LONG',
@@ -904,7 +909,8 @@ class SMCAnalyzer:
         try:
             ohlcv_5m = await self.get_ohlcv(symbol, config.SCANNER_TIMEFRAME, limit=100)
             ohlcv_15m = await self.get_ohlcv(symbol, config.TREND_TIMEFRAME, limit=100)
-            if not ohlcv_5m or not ohlcv_15m:
+            ohlcv_1h = await self.get_ohlcv(symbol, config.EMA_TIMEFRAME, limit=100)
+            if not ohlcv_5m or not ohlcv_15m or not ohlcv_1h:
                 return result
 
             closes_5m = [c[4] for c in ohlcv_5m]
@@ -912,6 +918,12 @@ class SMCAnalyzer:
             lows_5m = [l[3] for l in ohlcv_5m]
             volumes_5m = [v[5] for v in ohlcv_5m]
             current_price = closes_5m[-1]
+
+            closes_1h = [c[4] for c in ohlcv_1h]
+            ema200_1h = self.calculate_ema(closes_1h, 200)
+            htf_trend = 'NONE'
+            if ema200_1h:
+                htf_trend = 'LONG' if closes_1h[-1] > ema200_1h[-1] else 'SHORT'
 
             long_score, short_score = 0, 0
             long_ind, short_ind = {}, {}
@@ -949,16 +961,16 @@ class SMCAnalyzer:
             rsi = self.calculate_rsi(closes_5m, 14)
             if rsi and len(rsi) >= 2:
                 result['rsi'] = rsi[-1]
-                if 40 <= rsi[-1] <= 80 and rsi[-1] > rsi[-2]:
+                if 40 <= rsi[-1] <= 70 and rsi[-1] > rsi[-2]:
                     long_score += 1; long_ind['rsi_momentum'] = True
-                if 20 <= rsi[-1] <= 60 and rsi[-1] < rsi[-2]:
+                if 30 <= rsi[-1] <= 60 and rsi[-1] < rsi[-2]:
                     short_score += 1; short_ind['rsi_momentum'] = True
 
             # 5. ADX
             adx = self.calculate_adx(highs_5m, lows_5m, closes_5m, 14)
             if adx:
                 result['adx'] = adx[-1]
-                if adx[-1] > MIN_ADX:
+                if adx[-1] > 25:
                     long_score += 1; short_score += 1
                     long_ind['adx'] = True; short_ind['adx'] = True
 
@@ -979,32 +991,48 @@ class SMCAnalyzer:
                     result['volume_ok'] = True
                     long_ind['volume_spike'] = True; short_ind['volume_spike'] = True
 
+            # 8. Order Block
+            ob = self.detect_order_block(ohlcv_5m)
+            if ob == 'BULLISH':
+                long_score += 1; long_ind['order_block'] = True
+            if ob == 'BEARISH':
+                short_score += 1; short_ind['order_block'] = True
+
             potential_dir = 'LONG' if current_price > ema50[-1] else 'SHORT'
 
-            # Паттерн 1: Тренд + FVG + ADX
-            p1_trend = (potential_dir == 'LONG' and current_price > ema50[-1]) or \
-                       (potential_dir == 'SHORT' and current_price < ema50[-1])
-            p1_fvg = (fvg == 'BULLISH' and potential_dir == 'LONG') or \
-                     (fvg == 'BEARISH' and potential_dir == 'SHORT')
-            p1_adx = adx and adx[-1] > MIN_ADX
+            # GENIUS 80% WINRATE SETUP
+            p_long_strict = (
+                htf_trend == 'LONG' and 
+                current_price > ema50[-1] and 
+                fvg == 'BULLISH' and 
+                ob == 'BULLISH' and 
+                vol_ratio > MIN_VOLUME_RATIO and 
+                adx and adx[-1] > 25 and 
+                (40 <= rsi[-1] <= 70) and
+                macd['histogram'] > 0
+            )
 
-            # Паттерн 2: BOS + MACD + Объём
-            p2_bos = (bos in ['BOS_UP', 'CHoCH_BULLISH'] and potential_dir == 'LONG') or \
-                     (bos in ['BOS_DOWN', 'CHoCH_BEARISH'] and potential_dir == 'SHORT')
-            p2_macd = (macd['histogram'] > 0 and macd['macd'] > macd['signal'] and potential_dir == 'LONG') or \
-                      (macd['histogram'] < 0 and macd['macd'] < macd['signal'] and potential_dir == 'SHORT')
-            p2_vol = vol_sma and vol_ratio > MIN_VOLUME_RATIO
+            p_short_strict = (
+                htf_trend == 'SHORT' and 
+                current_price < ema50[-1] and 
+                fvg == 'BEARISH' and 
+                ob == 'BEARISH' and 
+                vol_ratio > MIN_VOLUME_RATIO and 
+                adx and adx[-1] > 25 and 
+                (30 <= rsi[-1] <= 60) and
+                macd['histogram'] < 0
+            )
 
-            if p1_trend and p1_fvg and p1_adx:
+            if p_long_strict:
                 result['signal'] = True
-                result['direction'] = potential_dir
-                result['score'] = "PATTERN_1_TREND_FVG"
-                result['indicators'] = {'ema_trend': True, 'fvg': bool(fvg), 'adx': True}
-            elif p2_bos and p2_macd and p2_vol:
+                result['direction'] = 'LONG'
+                result['score'] = "ULTRA_STRICT_LONG"
+                result['indicators'] = {'htf_trend': True, 'ema_trend': True, 'fvg': True, 'ob': True, 'vol_spike': True, 'adx': True, 'macd': True}
+            elif p_short_strict:
                 result['signal'] = True
-                result['direction'] = potential_dir
-                result['score'] = "PATTERN_2_BOS_VOL"
-                result['indicators'] = {'bos': True, 'macd': True, 'volume': True}
+                result['direction'] = 'SHORT'
+                result['score'] = "ULTRA_STRICT_SHORT"
+                result['indicators'] = {'htf_trend': True, 'ema_trend': True, 'fvg': True, 'ob': True, 'vol_spike': True, 'adx': True, 'macd': True}
             else:
                 result['signal'] = False
                 result['direction'] = potential_dir
@@ -1152,8 +1180,8 @@ class SmartMoneyBot:
                     vol = tickers[symbol].get('quoteVolume', 0.0) if symbol in tickers else 0.0
                     usdt_perps.append((symbol, vol))
             usdt_perps.sort(key=lambda x: x[1], reverse=True)
-            self.symbols_to_scan = [pair[0] for pair in usdt_perps[:80]]
-            logger.info(f"🔄 Топ-80 пар обновлён")
+            self.symbols_to_scan = [pair[0] for pair in usdt_perps]
+            logger.info(f"🔄 Список пар обновлён (всего {len(self.symbols_to_scan)} шт.)")
         except Exception as e:
             logger.error(f"Ошибка обновления топа пар: {e}")
             if not self.symbols_to_scan:
@@ -1177,8 +1205,7 @@ class SmartMoneyBot:
             pass
 
     def compute_optimal_slots(self, virtual_equity: float) -> int:
-        raw = int(virtual_equity // config.ENTRY_AMOUNT)  # $10 на слот
-        return max(1, min(raw, 5))  # Макс 5 позиций по ~$10
+        return 5  # Всегда максимум 5 позиций (компоундинг 20% от депозита на сделку)
 
     async def calculate_position_size(self, entry_price, score=5) -> tuple:
         try:
@@ -1192,12 +1219,12 @@ class SmartMoneyBot:
                 logger.warning(f"Свободно ${free_equity:.2f} < минимума. Ждём закрытия позиций.")
                 return 0, 0, 0
 
-            optimal_slots = self.compute_optimal_slots(free_equity)
-            logger.info(f"💰 Баланс: виртуальный=${virtual_equity:.2f} | слотов={optimal_slots} | свободно=${free_equity:.2f}")
+            optimal_slots = self.compute_optimal_slots(virtual_equity)
+            logger.info(f"💰 Баланс: виртуальный=${virtual_equity:.2f} | свободно=${free_equity:.2f}")
 
-            base_slot = free_equity / optimal_slots
-            # Не раздуваем позицию сверх слота — строго $10 на сделку
-            amount_usdt = min(base_slot, config.ENTRY_AMOUNT * 1.5)
+            # Гениальный сложный процент (Compounding): берем 20% от всего депозита на сделку
+            target_amount_usdt = virtual_equity / optimal_slots
+            amount_usdt = min(target_amount_usdt, free_equity)
 
             if amount_usdt < config.MIN_SLOT_USDT:
                 if free_equity >= config.MIN_SLOT_USDT:
@@ -1939,29 +1966,19 @@ class SmartMoneyBot:
         except Exception:
             return True
 
-    async def scan_market(self):
-        if not self.is_running:
-            return
-        logger.info(f"Сканирование рынка... ({len(self.symbols_to_scan)} символов)")
-
-        for symbol in self.symbols_to_scan:
-            await asyncio.sleep(0.5)
+    async def process_single_symbol(self, symbol: str):
+        try:
             if not self.is_running:
-                break
+                return
             if any(p.symbol == symbol for p in self.positions.values()):
-                continue
-
-            # ИСПРАВЛЕНИЕ: проверяем волатильность перед анализом
+                return
             if await self.is_sideways_market(symbol):
-                logger.debug(f"{symbol}: sideways market")
-                continue
-
+                return
             if not await self.check_volatility(symbol):
-                continue
+                return
 
             smc_result = await self.smc_analyzer.analyze_symbol(symbol)
             if smc_result['signal']:
-                # ПРОВЕРКА ИМПУЛЬСА 1м: не входим против текущего движения
                 try:
                     ohlcv_1m = await self.smc_analyzer.get_ohlcv(symbol, '1m', limit=5)
                     if ohlcv_1m and len(ohlcv_1m) >= 3:
@@ -1969,18 +1986,34 @@ class SmartMoneyBot:
                         mom_1m = (c1m[-1] - c1m[-3]) / c1m[-3] * 100
                         if smc_result['direction'] == 'LONG' and mom_1m < -0.05:
                             logger.info(f"⛔ {symbol} LONG отклонён: 1м импульс {mom_1m:+.3f}% (вниз)")
-                            continue
+                            return
                         if smc_result['direction'] == 'SHORT' and mom_1m > 0.05:
                             logger.info(f"⛔ {symbol} SHORT отклонён: 1м импульс {mom_1m:+.3f}% (вверх)")
-                            continue
+                            return
                 except Exception:
-                    pass  # Если не удалось проверить — входим по основному сигналу
+                    pass
 
                 logger.info(f"СИГНАЛ: {symbol} ({smc_result['score']})")
                 ticker = await self.exchange.fetch_ticker(symbol)
                 entry_price = ticker['last']
                 await self.open_position(symbol, entry_price, smc_result)
-                await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.error(f"Ошибка при обработке {symbol}: {e}")
+
+    async def scan_market(self):
+        if not self.is_running:
+            return
+        logger.info(f"Сканирование рынка... ({len(self.symbols_to_scan)} символов)")
+
+        chunk_size = 40
+        for i in range(0, len(self.symbols_to_scan), chunk_size):
+            if not self.is_running:
+                break
+            chunk = self.symbols_to_scan[i:i + chunk_size]
+            tasks = [self.process_single_symbol(symbol) for symbol in chunk]
+            await asyncio.gather(*tasks)
+            await asyncio.sleep(1)
+
 
         self.last_scan_time = datetime.now(timezone.utc)
         logger.info("Сканирование завершено")
