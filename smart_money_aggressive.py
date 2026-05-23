@@ -1195,18 +1195,60 @@ class SmartMoneyBot:
             pass
 
     def compute_optimal_slots(self, virtual_equity: float) -> int:
-        return 1  # Используем весь депозит в одной позиции с полным реинвестом
+        return 5  # Бот сам распределяет капитал по силе сигналов
 
     async def calculate_position_size(self, entry_price, score=5) -> tuple:
         try:
-            # Берём РЕАЛЬНЫЙ баланс с биржи, не из БД!
             balance = await self.exchange.fetch_balance()
+
             free_balance = float(balance.get('USDT', {}).get('free', 0))
             total_balance = float(balance.get('USDT', {}).get('total', 0))
 
             if free_balance < config.MIN_SLOT_USDT:
-                logger.warning(f"Свободно ${free_balance:.2f} < минимума ${config.MIN_SLOT_USDT}. Ждём.")
+                logger.warning(
+                    f"Свободно ${free_balance:.2f} < минимума ${config.MIN_SLOT_USDT}"
+                )
                 return 0, 0, 0
+
+            # Динамический риск по силе сигнала
+            risk_map = {
+                2: 0.15,
+                3: 0.25,
+                4: 0.35,
+                5: 0.50
+            }
+
+            risk_percent = risk_map.get(score, 0.20)
+
+            # Никогда не превышаем депозит
+            amount_usdt = min(
+                free_balance * risk_percent,
+                free_balance * 0.95
+            )
+
+            if amount_usdt < config.MIN_SLOT_USDT:
+                amount_usdt = config.MIN_SLOT_USDT
+
+            if amount_usdt > free_balance:
+                amount_usdt = free_balance * 0.95
+
+            leverage = config.LEVERAGE
+            notional = amount_usdt * leverage
+            quantity = notional / entry_price
+
+            logger.info(
+                f"📊 Dynamic Risk | score={score} "
+                f"| risk={risk_percent * 100:.0f}% "
+                f"| margin=${amount_usdt:.2f} "
+                f"| free=${free_balance:.2f} "
+                f"| total=${total_balance:.2f}"
+            )
+
+            return quantity, amount_usdt, notional
+
+        except Exception as e:
+            logger.error(f"Ошибка расчёта размера: {e}")
+            return 0, 0, 0
 
             # Используем почти весь доступный баланс.
             # Вся прибыль автоматически реинвестируется.
