@@ -995,19 +995,19 @@ class SMCAnalyzer:
             if ob == 'BEARISH':
                 short_score += 1; short_ind['order_block'] = True
 
-            potential_dir = 'LONG' if current_price > ema50[-1] else 'SHORT'
-
             # ========== SCORING SYSTEM ==========
-            # Вход при score >= 3 из 8 — как топовые боты
+            # Вход при score >= 3 из 8, НО строго по тренду EMA50!
             MIN_SCORE_TO_TRADE = 3
+            is_uptrend = current_price > ema50[-1]
+            is_downtrend = current_price < ema50[-1]
 
-            if long_score >= MIN_SCORE_TO_TRADE and long_score >= short_score:
+            if is_uptrend and long_score >= MIN_SCORE_TO_TRADE and long_score >= short_score:
                 result['signal'] = True
                 result['direction'] = 'LONG'
                 result['score'] = f"LONG_SCORE_{long_score}"
                 result['indicators'] = long_ind
                 logger.info(f"📊 {symbol} LONG score={long_score} ind={long_ind}")
-            elif short_score >= MIN_SCORE_TO_TRADE and short_score > long_score:
+            elif is_downtrend and short_score >= MIN_SCORE_TO_TRADE and short_score > long_score:
                 result['signal'] = True
                 result['direction'] = 'SHORT'
                 result['score'] = f"SHORT_SCORE_{short_score}"
@@ -2054,11 +2054,13 @@ class SmartMoneyBot:
                 current_price = ticker['last']
                 rem = max(pos.remaining_quantity, 0.0)
                 if pos.side == 'SHORT':
-                    pnl = pos.realized_pnl_usd + (pos.entry_price - current_price) * rem
-                    pnl_pct = ((pos.entry_price - current_price) / pos.entry_price) * 100 * pos.leverage
+                    price_change_pct = ((pos.entry_price - current_price) / pos.entry_price) * 100
                 else:
-                    pnl = pos.realized_pnl_usd + (current_price - pos.entry_price) * rem
-                    pnl_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100 * pos.leverage
+                    price_change_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100
+                
+                qty_ratio = rem / pos.quantity if pos.quantity > 0 else 1.0
+                pnl = pos.realized_pnl_usd + (pos.amount_usdt * (price_change_pct / 100.0) * pos.leverage * qty_ratio)
+                pnl_pct = price_change_pct * pos.leverage
                 total_open_pnl += pnl
                 emoji = "🟢" if pnl >= 0 else "🔴"
                 positions_info += (
@@ -2272,11 +2274,13 @@ class SmartMoneyBot:
                 current_price = ticker['last']
                 rem = max(pos.remaining_quantity, 0.0)
                 if pos.side == 'SHORT':
-                    pnl = pos.realized_pnl_usd + (pos.entry_price - current_price) * rem
-                    pnl_pct = ((pos.entry_price - current_price) / pos.entry_price) * 100 * pos.leverage
+                    price_change_pct = ((pos.entry_price - current_price) / pos.entry_price) * 100
                 else:
-                    pnl = pos.realized_pnl_usd + (current_price - pos.entry_price) * rem
-                    pnl_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100 * pos.leverage
+                    price_change_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100
+                
+                qty_ratio = rem / pos.quantity if pos.quantity > 0 else 1.0
+                pnl = pos.realized_pnl_usd + (pos.amount_usdt * (price_change_pct / 100.0) * pos.leverage * qty_ratio)
+                pnl_pct = price_change_pct * pos.leverage
                 msg = (
                     f"{'🔴' if pos.side == 'SHORT' else '🟢'} #{pos.symbol.replace('/USDT', '')} {pos.side}\n"
                     f"Вход: {pos.entry_price:.5f} | Текущая: {current_price:.5f}\n"
@@ -2356,11 +2360,14 @@ class SmartMoneyBot:
                     ticker = await self.exchange.fetch_ticker(pos.symbol)
                     current_price = ticker['last']
                     if pos.side == 'SHORT':
-                        pos_pnl = pos.realized_pnl_usd + (pos.entry_price - current_price) * pos.remaining_quantity
-                        roe = ((pos.entry_price - current_price) / pos.entry_price) * 100 * pos.leverage
+                        price_change_pct = ((pos.entry_price - current_price) / pos.entry_price) * 100
                     else:
-                        pos_pnl = pos.realized_pnl_usd + (current_price - pos.entry_price) * pos.remaining_quantity
-                        roe = ((current_price - pos.entry_price) / pos.entry_price) * 100 * pos.leverage
+                        price_change_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100
+
+                    rem = max(pos.remaining_quantity, 0.0)
+                    qty_ratio = rem / pos.quantity if pos.quantity > 0 else 1.0
+                    pos_pnl = pos.realized_pnl_usd + (pos.amount_usdt * (price_change_pct / 100.0) * pos.leverage * qty_ratio)
+                    roe = price_change_pct * pos.leverage
                     unrealized_pnl += pos_pnl
                     emoji = "🟢" if roe >= 0 else "🔴"
                     positions_text += (
