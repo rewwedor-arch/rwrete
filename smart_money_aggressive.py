@@ -4,6 +4,7 @@ BTC_TREND_FILTER = True
 HIGH_TIMEFRAME_CONFIRMATION = True
 
 
+
 # ===== EXTRA MON PROTECTION =====
 def is_blacklisted_symbol(symbol):
     s = symbol.upper()
@@ -57,6 +58,7 @@ async def get_max_leverage(exchange, symbol):
         return 20
 
 
+
 # ===== SINGLE INSTANCE PROTECTION =====
 import os
 
@@ -70,6 +72,7 @@ try:
             f.write("running")
 except Exception:
     pass
+
 
 
 # ===== SAFE LEVERAGE FIX =====
@@ -93,6 +96,7 @@ def get_safe_leverage(symbol, requested_leverage=75):
 
     except Exception:
         return 20
+
 
 
 # ===== REPORT COOLDOWN =====
@@ -154,6 +158,10 @@ def institutional_filter(
         score += 1
 
     return score >= 6
+
+
+
+
 
 
 # ===== WEAK SIGNAL BLOCKER =====
@@ -269,7 +277,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-    async def task_with_log(task_name: str, coro):
+async def task_with_log(task_name: str, coro):
     try:
         logger.info(f"🚀 Запуск задачи: {task_name}")
         result = await coro
@@ -353,7 +361,7 @@ config = StrategyConfig()
 ALLOW_TRADING = True
 
 
-    async def check_fear_greed_index(bot: 'SmartMoneyBot'):
+async def check_fear_greed_index(bot: 'SmartMoneyBot'):
     global ALLOW_TRADING
     import aiohttp as _aiohttp
 
@@ -386,7 +394,7 @@ ALLOW_TRADING = True
         await asyncio.sleep(14400)
 
 
-    async def trailing_stop_loop(bot: 'SmartMoneyBot'):
+async def trailing_stop_loop(bot: 'SmartMoneyBot'):
     """Фоновый трейлинг-стоп каждые 10 секунд"""
     while bot.is_running:
         try:
@@ -1223,7 +1231,7 @@ class SmartMoneyBot:
             logger.error(f"Ошибка установки плеча: {e}")
             return 5
 
-    async def calculate_position_size(self, entry_price, score=5) -> tuple:
+async def calculate_position_size(self, entry_price, score=5) -> tuple:
         try:
             balance = await self.exchange.fetch_balance()
 
@@ -1283,43 +1291,6 @@ class SmartMoneyBot:
                 f"| margin=${amount_usdt:.2f} "
                 f"| free=${free_balance:.2f} "
                 f"| total=${total_balance:.2f}"
-            )
-
-            return quantity, amount_usdt, notional
-
-        except Exception as e:
-            logger.error(f"Ошибка расчёта размера: {e}")
-            return 0, 0, 0
-
-            # Используем почти весь доступный баланс.
-            # Вся прибыль автоматически реинвестируется.
-            amount_usdt = free_balance * 0.98
-
-            if amount_usdt < config.MIN_SLOT_USDT:
-                return 0, 0, 0
-
-            leverage = config.LEVERAGE
-
-            # Защита от отрицательных или нулевых значений
-            if entry_price <= 0:
-                return 0, 0, 0
-
-            if leverage <= 0:
-                leverage = 1
-
-            # Номинал позиции
-            notional = amount_usdt * leverage
-
-            # Размер позиции
-            quantity = notional / entry_price
-
-            # Финальная защита
-            if quantity <= 0 or notional <= 0:
-                return 0, 0, 0
-
-            logger.info(
-                f"🚀 FULL REINVEST MODE | маржа=${amount_usdt:.2f} "
-                f"| free=${free_balance:.2f} | total=${total_balance:.2f} | x{leverage}"
             )
 
             return quantity, amount_usdt, notional
@@ -1835,6 +1806,7 @@ class SmartMoneyBot:
                 closed_count += 1
             await asyncio.sleep(0.5)
         await self.send_telegram_message(f"✅ Закрыто: {closed_count}/{len(position_ids)}")
+
 
 
     async def apply_dynamic_sl(self, position: Position, price_change_pct: float, current_price: float):
@@ -2834,7 +2806,7 @@ class SmartMoneyBot:
 # ТОЧКА ВХОДА
 # ============================================================================
 
-    def _env_secret(*names: str) -> str:
+def _env_secret(*names: str) -> str:
     for n in names:
         raw = os.getenv(n)
         if raw is None:
@@ -2845,7 +2817,7 @@ class SmartMoneyBot:
     return ''
 
 
-    async def main():
+async def main():
     from dotenv import load_dotenv
     _root = Path(__file__).resolve().parent
     load_dotenv(_root / '.env')
@@ -2897,7 +2869,12 @@ if __name__ == '__main__':
     asyncio.run(main())
 
 
-    def calculate_signal_strength(adx, volume_ratio, ema_trend, macd_ok):
+
+
+
+
+
+def calculate_signal_strength(adx, volume_ratio, ema_trend, macd_ok):
     score = 0
 
     if adx >= 20:
@@ -2923,7 +2900,7 @@ ENABLE_ORDER_BLOCKS = True
 ENABLE_VOLUME_CONFIRMATION = True
 ENABLE_HTF_CONFIRMATION = True
 
-    def ultra_signal_filter(adx, rsi, volume_ratio, ema_trend, macd_ok, bos, fvg):
+def ultra_signal_filter(adx, rsi, volume_ratio, ema_trend, macd_ok, bos, fvg):
     """Упрощенный фильтр:
     EMA + BOS + Volume + умеренный ADX
     Без переоптимизации и поздних входов
@@ -2950,7 +2927,7 @@ TRAILING_AFTER = 4.0
 
 print("🧠 TITAN SMART MONEY MODE ENABLED")
 
-    def format_signal(symbol, entry, tp1, tp2, tp3, sl, rr, leverage):
+def format_signal(symbol, entry, tp1, tp2, tp3, sl, rr, leverage):
     return f"""
 🔔 SMART MONEY SIGNAL
 
@@ -2982,7 +2959,7 @@ print("🧠 TITAN SMART MONEY MODE ENABLED")
 # ===== ADAPTIVE SIGNAL ENGINE =====
 ENABLE_ADAPTIVE_SIGNALS = True
 
-    def adaptive_signal_engine(
+def adaptive_signal_engine(
     adx,
     rsi,
     volume_ratio,
@@ -3023,7 +3000,7 @@ print("📡 REALTIME SCANNING ACTIVE")
 print("🧠 BALANCED SMART MONEY MODE")
 
 
-    def safe_format_signal(symbol, entry=None, tp1=None, tp2=None, tp3=None, sl=None):
+def safe_format_signal(symbol, entry=None, tp1=None, tp2=None, tp3=None, sl=None):
     try:
         return f"""
 🔔 SMART MONEY SIGNAL
@@ -3044,7 +3021,7 @@ if __name__ == "__main__":
     print("🚀 SMART MONEY BOT STARTED")
 
 
-    async def safe_hourly_report():
+async def safe_hourly_report():
     global LAST_HOURLY_REPORT
     import time
 
@@ -3065,7 +3042,7 @@ if __name__ == "__main__":
 
 _last_report_hour = None
 
-    async def controlled_hourly_report():
+async def controlled_hourly_report():
     global _last_report_hour
 
     now = time.localtime()
@@ -3088,7 +3065,7 @@ _last_report_hour = None
         print(f"❌ Hourly report failed: {e}")
 
 # ===== TP3 RUNNER LOGIC =====
-    async def runner_take_profit(current_roe, last_runner_tp=0):
+async def runner_take_profit(current_roe, last_runner_tp=0):
     if not RUNNER_MODE:
         return 0
 
