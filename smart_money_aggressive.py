@@ -1231,7 +1231,7 @@ class SmartMoneyBot:
             logger.error(f"Ошибка установки плеча: {e}")
             return 5
 
-async def calculate_position_size(self, entry_price, score=5) -> tuple:
+    async def calculate_position_size(self, entry_price, score=5) -> tuple:
         try:
             balance = await self.exchange.fetch_balance()
 
