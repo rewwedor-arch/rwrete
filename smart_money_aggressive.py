@@ -1197,7 +1197,41 @@ class SmartMoneyBot:
     def compute_optimal_slots(self, virtual_equity: float) -> int:
         return 5  # Бот сам распределяет капитал по силе сигналов
 
-    async def calculate_position_size(self, entry_price, score=5) -> tuple:
+    
+    async def get_safe_leverage(self, symbol):
+        try:
+            max_leverage = await self.get_safe_leverage(symbol) if hasattr(self, "get_safe_leverage") else config.LEVERAGE
+
+            try:
+                market = self.exchange.market(symbol)
+                limits = market.get("limits", {})
+                leverage_limits = limits.get("leverage", {})
+
+                if leverage_limits:
+                    exchange_max = int(leverage_limits.get("max", max_leverage))
+                    max_leverage = min(max_leverage, exchange_max)
+
+            except Exception:
+                pass
+
+            # Binance часто ограничивает плечо для дорогих монет
+            # Пытаемся уменьшать пока биржа не примет
+            for lev in [125, 100, 75, 50, 25, 20, 10, 5]:
+                if lev <= max_leverage:
+                    try:
+                        await self.exchange.set_leverage(lev, symbol)
+                        logger.info(f"✅ Плечо установлено x{lev} для {symbol}")
+                        return lev
+                    except Exception:
+                        continue
+
+            return 5
+
+        except Exception as e:
+            logger.error(f"Ошибка установки плеча: {e}")
+            return 5
+
+async def calculate_position_size(self, entry_price, score=5) -> tuple:
         try:
             balance = await self.exchange.fetch_balance()
 
@@ -1233,8 +1267,23 @@ class SmartMoneyBot:
                 amount_usdt = free_balance * 0.95
 
             leverage = config.LEVERAGE
+
+            # Защита от отрицательных или нулевых значений
+            if entry_price <= 0:
+                return 0, 0, 0
+
+            if leverage <= 0:
+                leverage = 1
+
+            # Номинал позиции
             notional = amount_usdt * leverage
+
+            # Размер позиции
             quantity = notional / entry_price
+
+            # Финальная защита
+            if quantity <= 0 or notional <= 0:
+                return 0, 0, 0
 
             logger.info(
                 f"📊 Dynamic Risk | score={score} "
@@ -1258,8 +1307,23 @@ class SmartMoneyBot:
                 return 0, 0, 0
 
             leverage = config.LEVERAGE
+
+            # Защита от отрицательных или нулевых значений
+            if entry_price <= 0:
+                return 0, 0, 0
+
+            if leverage <= 0:
+                leverage = 1
+
+            # Номинал позиции
             notional = amount_usdt * leverage
+
+            # Размер позиции
             quantity = notional / entry_price
+
+            # Финальная защита
+            if quantity <= 0 or notional <= 0:
+                return 0, 0, 0
 
             logger.info(
                 f"🚀 FULL REINVEST MODE | маржа=${amount_usdt:.2f} "
