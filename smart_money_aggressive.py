@@ -997,37 +997,26 @@ class SMCAnalyzer:
 
             potential_dir = 'LONG' if current_price > ema50[-1] else 'SHORT'
 
-            # GENIUS HIGH-FREQUENCY 80% WINRATE SETUP
-            p_long_strict = (
-                current_price > ema50[-1] and 
-                (fvg == 'BULLISH' or ob == 'BULLISH') and 
-                vol_ratio > 1.2 and 
-                adx and adx[-1] > 20 and 
-                macd['histogram'] > 0
-            )
+            # ========== SCORING SYSTEM ==========
+            # Вход при score >= 3 из 8 — как топовые боты
+            MIN_SCORE_TO_TRADE = 3
 
-            p_short_strict = (
-                current_price < ema50[-1] and 
-                (fvg == 'BEARISH' or ob == 'BEARISH') and 
-                vol_ratio > 1.2 and 
-                adx and adx[-1] > 20 and 
-                macd['histogram'] < 0
-            )
-
-            if p_long_strict:
+            if long_score >= MIN_SCORE_TO_TRADE and long_score >= short_score:
                 result['signal'] = True
                 result['direction'] = 'LONG'
-                result['score'] = "SMART_MOMENTUM_LONG"
-                result['indicators'] = {'ema_trend': True, 'fvg_or_ob': True, 'vol': True, 'adx': True, 'macd': True}
-            elif p_short_strict:
+                result['score'] = f"LONG_SCORE_{long_score}"
+                result['indicators'] = long_ind
+                logger.info(f"📊 {symbol} LONG score={long_score} ind={long_ind}")
+            elif short_score >= MIN_SCORE_TO_TRADE and short_score > long_score:
                 result['signal'] = True
                 result['direction'] = 'SHORT'
-                result['score'] = "SMART_MOMENTUM_SHORT"
-                result['indicators'] = {'ema_trend': True, 'fvg_or_ob': True, 'vol': True, 'adx': True, 'macd': True}
+                result['score'] = f"SHORT_SCORE_{short_score}"
+                result['indicators'] = short_ind
+                logger.info(f"📊 {symbol} SHORT score={short_score} ind={short_ind}")
             else:
                 result['signal'] = False
                 result['direction'] = potential_dir
-                result['score'] = "NO_MATCH"
+                result['score'] = f"LOW_L{long_score}_S{short_score}"
                 result['indicators'] = {}
 
         except Exception as e:
@@ -1163,20 +1152,19 @@ class SmartMoneyBot:
 
     async def update_top_symbols(self):
         try:
-            markets = await self.exchange.load_markets(True) # Force reload to get fresh status
+            markets = await self.exchange.load_markets(True)
             tickers = await self.exchange.fetch_tickers()
             usdt_perps = []
             for symbol, market in markets.items():
-                # Проверяем, что пара торгуется за USDT, это своп (фьючерс) и она активна
                 if 'USDT' in symbol and market.get('type') == 'swap' and market.get('active', True):
                     info = market.get('info', {})
-                    # Проверяем статус биржи, чтобы отсеять мусорные и закрытые пары
                     if info.get('status', 'TRADING') == 'TRADING' and info.get('contractType', 'PERPETUAL') == 'PERPETUAL':
                         vol = tickers[symbol].get('quoteVolume', 0.0) if symbol in tickers else 0.0
                         usdt_perps.append((symbol, vol))
             usdt_perps.sort(key=lambda x: x[1], reverse=True)
-            self.symbols_to_scan = [pair[0] for pair in usdt_perps]
-            logger.info(f"🔄 Список пар обновлён (всего {len(self.symbols_to_scan)} шт.)")
+            # Топ-150 по объёму — достаточно для поиска сигналов, не перегружая API
+            self.symbols_to_scan = [pair[0] for pair in usdt_perps[:150]]
+            logger.info(f"🔄 Топ-150 пар обновлён (из {len(usdt_perps)} доступных)")
         except Exception as e:
             logger.error(f"Ошибка обновления топа пар: {e}")
             if not self.symbols_to_scan:
@@ -1962,18 +1950,14 @@ class SmartMoneyBot:
             return True
 
     async def process_single_symbol(self, symbol: str):
+        """Анализ одного символа — без лишних API-вызовов"""
         try:
             if not self.is_running:
                 return
             if any(p.symbol == symbol for p in self.positions.values()):
                 return
-            if await self.is_sideways_market(symbol):
-                logger.debug(f"{symbol}: отсеян (боковик)")
-                return
-            if not await self.check_volatility(symbol):
-                logger.debug(f"{symbol}: отсеян (волатильность)")
-                return
 
+            # Сразу анализируем — все фильтры внутри analyze_symbol
             smc_result = await self.smc_analyzer.analyze_symbol(symbol)
             if smc_result['signal']:
                 logger.info(f"✅ СИГНАЛ НАЙДЕН: {symbol} {smc_result['direction']} ({smc_result['score']})")
@@ -1981,25 +1965,27 @@ class SmartMoneyBot:
                 entry_price = ticker['last']
                 await self.open_position(symbol, entry_price, smc_result)
         except Exception as e:
-            logger.error(f"Ошибка при обработке {symbol}: {e}")
+            if '-1122' not in str(e) and 'Invalid symbol' not in str(e):
+                logger.error(f"Ошибка при обработке {symbol}: {e}")
 
     async def scan_market(self):
         if not self.is_running:
             return
-        logger.info(f"Сканирование рынка... ({len(self.symbols_to_scan)} символов)")
+        total = len(self.symbols_to_scan)
+        logger.info(f"🔍 Сканирование рынка... ({total} символов)")
 
-        chunk_size = 40
-        for i in range(0, len(self.symbols_to_scan), chunk_size):
+        signals_found = 0
+        chunk_size = 10  # Маленькие чанки чтобы не перегружать API Binance
+        for i in range(0, total, chunk_size):
             if not self.is_running:
                 break
             chunk = self.symbols_to_scan[i:i + chunk_size]
-            tasks = [self.process_single_symbol(symbol) for symbol in chunk]
+            tasks = [self.process_single_symbol(s) for s in chunk]
             await asyncio.gather(*tasks)
-            await asyncio.sleep(1)
-
+            await asyncio.sleep(2)  # Пауза между чанками для rate limit
 
         self.last_scan_time = datetime.now(timezone.utc)
-        logger.info("Сканирование завершено")
+        logger.info(f"✅ Сканирование завершено ({total} пар)")
 
     async def run_scanner_loop(self):
         last_update = datetime.now(timezone.utc)
