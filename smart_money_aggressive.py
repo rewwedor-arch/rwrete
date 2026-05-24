@@ -887,27 +887,36 @@ class SMCAnalyzer:
             high3, low3 = c3[2], c3[3]
             # Bullish FVG: gap between candle 1 high and candle 3 low
             if low3 > high1:
-                return 'BULLISH'
+                # TRUE SMC: Входим только если текущая цена тестирует этот FVG (откат)
+                if high1 <= current_price <= low3 * 1.003:
+                    return 'BULLISH'
             # Bearish FVG: gap between candle 1 low and candle 3 high
             if high3 < low1:
-                return 'BEARISH'
+                if high3 * 0.997 <= current_price <= low1:
+                    return 'BEARISH'
         return ''
 
     def detect_order_block(self, ohlcv) -> str:
         if len(ohlcv) < 10:
             return 'NONE'
+        current_price = ohlcv[-1][4]
         for i in range(len(ohlcv)-10, len(ohlcv)-2):
             c1, c2, c3 = ohlcv[i], ohlcv[i+1], ohlcv[i+2]
             # Bullish OB: down candle followed by up candles
             if c1[4] < c1[1] and c2[4] > c2[1] and c3[4] > c3[1]:
                 move_pct = (c3[4] - c1[4]) / c1[4] * 100
                 if move_pct > 0.15:
-                    return 'BULLISH'
+                    ob_high, ob_low = c1[2], c1[3]
+                    # TRUE SMC: Входим только при откате к ордерблоку
+                    if ob_low <= current_price <= ob_high * 1.003:
+                        return 'BULLISH'
             # Bearish OB: up candle followed by down candles
             if c1[4] > c1[1] and c2[4] < c2[1] and c3[4] < c3[1]:
                 move_pct = (c1[4] - c3[4]) / c1[4] * 100
                 if move_pct > 0.15:
-                    return 'BEARISH'
+                    ob_high, ob_low = c1[2], c1[3]
+                    if ob_high * 0.997 <= current_price <= ob_high:
+                        return 'BEARISH'
         return 'NONE'
 
 
