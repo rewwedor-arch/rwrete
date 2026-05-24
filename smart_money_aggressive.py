@@ -122,6 +122,7 @@ class StrategyConfig:
     # Время позиции
     POSITION_TIMEOUT_HOURS: float = 1.8
     BAD_POSITION_TIMEOUT_MINUTES: int = 12
+    BAD_TRADE_EXIT_MINUTES: int = 6
 
 config = StrategyConfig()
 
