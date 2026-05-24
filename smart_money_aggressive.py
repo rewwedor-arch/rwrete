@@ -308,11 +308,11 @@ class StrategyConfig:
     LEVERAGE: int = 75  # Максимальное плечо для агрессивного разгона
 
     # === SL/TP ДЛЯ АГРЕССИВНОГО СКАЛЬПИНГА x75 ===
-    STOP_LOSS_PCT: float = 0.8       # -60% ROE: жёсткий SL
-    TAKE_PROFIT_PCT: float = 1.5     # TP1 на бирже
+    STOP_LOSS_PCT: float = 0.5       # -37.5% ROE: жёсткий SL
+    TAKE_PROFIT_PCT: float = 1.0     # TP1 на бирже
     TAKE_PROFIT: float = 0.8
-    TP2_PCT: float = 2.5             # TP2 на бирже
-    TP3_PCT: float = 4.0             # TP3 на бирже (closePosition)
+    TP2_PCT: float = 1.5             # TP2 на бирже
+    TP3_PCT: float = 2.5             # TP3 на бирже (closePosition)
 
     DAILY_TARGET_MIN: float = 5.0
     DAILY_TARGET_MAX: float = 15.0
@@ -1873,30 +1873,30 @@ class SmartMoneyBot:
         new_level = position.dynamic_sl_level
 
         # Пороги для агрессивного скальпинга (исправленные, чтобы не душить сделку)
-        if price_change_pct >= 1.0 and position.dynamic_sl_level < 3:
-            # +75% ROE — мощный профит обеспечен
+        if price_change_pct >= 1.5 and position.dynamic_sl_level < 3:
+            # +112% ROE — мощный профит обеспечен
             if position.side == 'SHORT':
-                new_sl_price = position.entry_price * (1 - 0.005)
+                new_sl_price = position.entry_price * (1 - 0.01)
             else:
-                new_sl_price = position.entry_price * (1 + 0.005)
+                new_sl_price = position.entry_price * (1 + 0.01)
             new_level = 3
-        elif price_change_pct >= 0.6 and position.dynamic_sl_level < 2:
-            # +45% ROE — ПРОФИ: ФИКСИРУЕМ 50% ПРИБЫЛИ
+        elif price_change_pct >= 1.0 and position.dynamic_sl_level < 2:
+            # +75% ROE — ПРОФИ: ФИКСИРУЕМ 50% ПРИБЫЛИ
             half_qty = position.remaining_quantity * 0.5
             await self.close_partial_position(position, half_qty, current_price)
             
             # И фиксируем плюсовой стоп
             if position.side == 'SHORT':
-                new_sl_price = position.entry_price * (1 - 0.002)
+                new_sl_price = position.entry_price * (1 - 0.005)
             else:
-                new_sl_price = position.entry_price * (1 + 0.002)
+                new_sl_price = position.entry_price * (1 + 0.005)
             new_level = 2
-        elif price_change_pct >= 0.4 and position.dynamic_sl_level < 1:
-            # +30% ROE — перевод в безубыток
+        elif price_change_pct >= 0.5 and position.dynamic_sl_level < 1:
+            # +37% ROE — перевод в безубыток
             if position.side == 'SHORT':
-                new_sl_price = position.entry_price * (1 - 0.0005)
+                new_sl_price = position.entry_price * (1 - 0.001)
             else:
-                new_sl_price = position.entry_price * (1 + 0.0005)
+                new_sl_price = position.entry_price * (1 + 0.001)
             new_level = 1
 
         if not new_sl_price:
@@ -2415,8 +2415,12 @@ class SmartMoneyBot:
 
     async def cmd_reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
-            self.db.execute_query("UPDATE statistics SET total_pnl=0, profitable=0, total_trades=0, losing_trades=0", commit=True)
-            self.db.execute_query("UPDATE daily_statistics SET total_pnl=0, profitable_trades=0, losing_trades=0, total_trades=0 WHERE date=date('now')", commit=True)
+            import sqlite3
+            conn = sqlite3.connect(self.db.db_path)
+            conn.execute("UPDATE statistics SET total_pnl=0, profitable=0, total_trades=0, losing_trades=0")
+            conn.execute("UPDATE daily_statistics SET total_pnl=0, profitable_trades=0, losing_trades=0, total_trades=0 WHERE date=date('now')")
+            conn.commit()
+            conn.close()
             await self._safe_reply(update, "♻️ Статистика PnL успешно сброшена! Ваш виртуальный баланс снова равен начальному депозиту.")
             logger.info("Статистика PnL сброшена пользователем.")
         except Exception as e:
