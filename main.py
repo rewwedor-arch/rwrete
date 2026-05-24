@@ -40,11 +40,17 @@ def load_env_from_docker_secrets():
 
 async def run_bot_with_restart():
     """Запуск торгового бота с автоматическим перезапуском"""
-    from smart_money_aggressive import SmartMoneyBot
+    from smart_money_aggressive import SmartMoneyBot, config
     from dotenv import load_dotenv
     from pathlib import Path
     
     load_dotenv(Path(__file__).resolve().parent / '.env')
+
+    config.DEPOSIT = float(os.getenv('DEPOSIT', config.DEPOSIT))
+    config.ENTRY_AMOUNT = float(os.getenv('ENTRY_AMOUNT', config.ENTRY_AMOUNT))
+    config.LEVERAGE = int(os.getenv('LEVERAGE', config.LEVERAGE))
+    config.STOP_LOSS_PCT = float(os.getenv('STOP_LOSS', config.STOP_LOSS_PCT))
+    config.REINVEST_PROFITS = os.getenv('REINVEST_PROFITS', 'True').lower() == 'true'
     
     while True:
         try:

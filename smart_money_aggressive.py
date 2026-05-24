@@ -1109,7 +1109,23 @@ class SmartMoneyBot:
         
         # Отдельный Bot для отправки сообщений (работает независимо от polling)
         self._bot = Bot(token=self.telegram_token)
-    
+
+    async def send_telegram_message(self, text: str):
+        """Отправка сообщения во все активные чаты"""
+        for chat_id in list(self.active_chat_ids):
+            try:
+                await self._bot.send_message(chat_id=chat_id, text=text, parse_mode='HTML')
+            except Exception as e:
+                logger.warning(f"Не удалось отправить сообщение в чат {chat_id}: {e}")
+
+    async def disconnect(self):
+        """Закрытие соединения с биржей"""
+        try:
+            if self.exchange:
+                await self.exchange.close()
+        except Exception as e:
+            logger.warning(f"Ошибка при закрытии биржи: {e}")
+
     async def connect(self):
         """Подключение к бирже"""
         try:
@@ -1161,25 +1177,34 @@ class SmartMoneyBot:
             locked_margin = sum(p.amount_usdt for p in self.positions.values())
             free_equity = virtual_equity - locked_margin
 
+            logger.info(
+                f"POS_SIZE dbg: DEPOSIT={config.DEPOSIT} total_pnl={total_pnl} "
+                f"virtual={virtual_equity} locked={locked_margin} free={free_equity} "
+                f"score={score} entry={entry_price}"
+            )
+
             if free_equity < config.MIN_SLOT_USDT:
+                logger.warning(f"POS_SIZE: free_equity({free_equity}) < MIN_SLOT({config.MIN_SLOT_USDT})")
                 return 0, 0, 0
 
             optimal_slots = self.compute_optimal_slots(free_equity)
-            base_slot = virtual_equity / optimal_slots # use virtual_equity to not shrink sizes
+            base_slot = virtual_equity / optimal_slots
 
             weight = max(score, config.MIN_INDICATORS_SCORE) / 5.0
             amount_usdt = base_slot * weight
             amount_usdt = min(amount_usdt, free_equity)
             if amount_usdt < config.MIN_SLOT_USDT:
                 if free_equity >= config.MIN_SLOT_USDT:
-                    amount_usdt = config.MIN_SLOT_USDT  # FIX: Set to MIN_SLOT, not ALL free equity!
+                    amount_usdt = config.MIN_SLOT_USDT
                 else:
+                    logger.warning(f"POS_SIZE: amount_usdt({amount_usdt}) < MIN_SLOT but free_equity also < MIN_SLOT")
                     return 0, 0, 0
 
             quantity = amount_usdt * config.LEVERAGE / entry_price
+            logger.info(f"POS_SIZE result: qty={amount_usdt}={amount_usdt} margin={amount_usdt} notional={amount_usdt * config.LEVERAGE}")
             return quantity, amount_usdt, amount_usdt * config.LEVERAGE
         except Exception as e:
-            logger.error(f"Ошибка в calculate_position_size: {e}")
+            logger.error(f"Ошибка в calculate_position_size: {e}", exc_info=True)
             return 0, 0, 0
 
 
@@ -2327,6 +2352,9 @@ class SmartMoneyBot:
                 while self.is_running:
                     await asyncio.sleep(5)
 
+            except telegram.error.Conflict as e:
+                logger.warning(f"TG Conflict (другой экземпляр бота запущен): {e}. Повтор через 30 сек...")
+                await asyncio.sleep(30)
             except Exception as e:
                 logger.error(f"Ошибка Telegram бота: {e}")
 
