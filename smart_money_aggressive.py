@@ -1534,7 +1534,23 @@ class SmartMoneyBot:
         except Exception as e:
             logger.error(f"Ошибка переноса SL {position.symbol}: {e}")
 
-    async def monitor_positions(self):
+    
+    def calculate_position_roe(self, position, current_price):
+        """Единый корректный расчет ROE для LONG/SHORT"""
+        if position.side == 'SHORT':
+            price_change_pct = (
+                (position.entry_price - current_price)
+                / position.entry_price
+            ) * 100.0
+        else:
+            price_change_pct = (
+                (current_price - position.entry_price)
+                / position.entry_price
+            ) * 100.0
+
+        return price_change_pct * position.leverage
+
+async def monitor_positions(self):
         """Мониторинг позиций — Трейлинг, Частичные TP и Динамический SL"""
         for position_id, position in list(self.positions.items()):
             try:
@@ -1542,19 +1558,29 @@ class SmartMoneyBot:
                 ticker = await self.exchange.fetch_ticker(position.symbol)
                 current_price = ticker['last']
                 
-                # 2. Расчет PnL (универсальный для LONG и SHORT)
+                # 2. Корректный расчет ROE
+                pnl_pct = self.calculate_position_roe(
+                    position,
+                    current_price
+                )
+
                 if position.side == 'SHORT':
-                    price_change_pct = ((position.entry_price - current_price) / position.entry_price) * 100
+                    price_change_pct = (
+                        (position.entry_price - current_price)
+                        / position.entry_price
+                    ) * 100
                 else:
-                    price_change_pct = ((current_price - position.entry_price) / position.entry_price) * 100
-                pnl_pct = price_change_pct * position.leverage
+                    price_change_pct = (
+                        (current_price - position.entry_price)
+                        / position.entry_price
+                    ) * 100
                 if position.side == 'SHORT':
                     pnl_usd = position.realized_pnl_usd + (position.entry_price - current_price) * position.remaining_quantity
                 else:
                     pnl_usd = position.realized_pnl_usd + (current_price - position.entry_price) * position.remaining_quantity
                 
                 # 3. Обновление пика (peak_pnl)
-                if pnl_pct > position.peak_pnl:
+                if isinstance(pnl_pct, (int, float)) and pnl_pct > position.peak_pnl:
                     position.peak_pnl = pnl_pct
                 
                 pair = position.symbol.replace('/USDT', '')
@@ -1614,7 +1640,7 @@ class SmartMoneyBot:
                             f"Сейчас: {pnl_pct:+.1f}%\n"
                             f"Откат: {drawdown:.1f}%\n\n"
                             f"🚨 АВТОМАТИЧЕСКИЙ ВЫХОД!\n"
-                            f"Закрыто на: {pnl_pct:+.1f}%\n"
+                            f"Фактический ROE: {pnl_pct:+.1f}%\n"
                             f"💰 Вложено: ${position.amount_usdt:.2f}\n"
                             f"Текущий PnL: {'+' if pnl_usd >= 0 else ''}${pnl_usd:.2f}"
                         )
@@ -1638,7 +1664,7 @@ class SmartMoneyBot:
                             f"🛡 TRAILING STOP | {pair}\n"
                             f"Пик: +{position.trailing_peak:.1f}%\n"
                             f"Откат: {trailing_drawdown:.1f}%\n"
-                            f"Закрыто на: {pnl_pct:+.1f}%\n"
+                            f"Фактический ROE: {pnl_pct:+.1f}%\n"
                             f"💰 Вложено: ${position.amount_usdt:.2f}\n"
                             f"Текущий PnL: {'+' if pnl_usd >= 0 else ''}${pnl_usd:.2f}"
                         )
