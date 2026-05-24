@@ -34,6 +34,7 @@ from pathlib import Path
 import json
 
 # Telegram Bot
+import telegram
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -1612,7 +1613,7 @@ class SmartMoneyBot:
                     lows = [x[3] for x in ohlcv]
                     closes = [x[4] for x in ohlcv]
 
-                    adx_values = self.indicators.calculate_adx(
+                    adx_values = self.smc_analyzer.calculate_adx(
                         highs,
                         lows,
                         closes
@@ -1636,7 +1637,7 @@ class SmartMoneyBot:
                     )
 
                     await self.close_position(
-                        position.symbol,
+                        position.id,
                         "Momentum dead"
                     )
 
@@ -1762,7 +1763,7 @@ class SmartMoneyBot:
 
                 if pnl_pct >= config.PARTIAL_TP2_PCT and not position.partial_tp2_done:
                     position.partial_tp2_done = True
-                    await self.close_partial_position(position, position.quantity * 0.30, current_price)
+                    await self.close_partial_position(position, position.remaining_quantity * 0.50, current_price)
                     new_sl = position.entry_price * (1 - 0.009) if position.side == 'SHORT' else position.entry_price * (1 + 0.009)
                     await self._update_exchange_sl(position, new_sl)
                     await self.send_telegram_message(
@@ -1806,7 +1807,8 @@ class SmartMoneyBot:
             if duration_minutes < config.MOMENTUM_EXIT_MINUTES:
                 return
 
-            current_price = await self.get_current_price(position.symbol)
+            ticker = await self.exchange.fetch_ticker(position.symbol)
+            current_price = ticker['last']
             pnl_pct = self.calculate_position_roe(position, current_price)
 
             # Не трогаем хорошие позиции
