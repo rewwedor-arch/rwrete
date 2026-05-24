@@ -35,7 +35,7 @@ import json
 
 # Telegram Bot
 from telegram import Update, Bot
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 # CCXT для Binance Futures
 import ccxt.async_support as ccxt
@@ -81,7 +81,7 @@ class StrategyConfig:
 
     # Параметры сигналов — КЛАССИЧЕСКИЕ 7 ИНДИКАТОРОВ
     MIN_INDICATORS_SCORE: int = 3  # Минимум 4 из 7
-    TOTAL_INDICATORS: int = 7
+    TOTAL_INDICATORS: int = 8
 
     # Таймфреймы
     SCANNER_TIMEFRAME: str = '5m'
@@ -173,97 +173,6 @@ async def check_fear_greed_index(bot: 'SmartMoneyBot'):
 
         await asyncio.sleep(1800)
 
-
-async def trailing_stop_loop(bot: 'SmartMoneyBot'):
-    """Фоновый трейлинг-стоп: проверка каждые 10 секунд.
-    При профите > TRAILING_ACTIVATE_PCT — двигает SL в безубыток и далее за ценой.
-    """
-    while bot.is_running:
-        try:
-            for pid, pos in list(bot.positions.items()):
-                try:
-                    ticker = await bot.exchange.fetch_ticker(pos.symbol)
-                    current_price = ticker['last']
-
-                    # Расчет изменения цены в % (без плеча)
-                    if pos.side == 'SHORT':
-                        price_change_pct = ((pos.entry_price - current_price) / pos.entry_price) * 100
-                    else:
-                        price_change_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100
-
-                    # Активация трейлинга при профите > 1%
-                    if price_change_pct >= config.TRAILING_ACTIVATE_PCT:
-                        if not pos.trailing_active:
-                            pos.trailing_active = True
-                            pos.trailing_peak = price_change_pct
-                            logger.info(f"Трейлинг активирован {pos.symbol}: {price_change_pct:+.2f}%")
-
-                        # Обновление пика
-                        if price_change_pct > pos.trailing_peak:
-                            pos.trailing_peak = price_change_pct
-
-                        # Расчет нового SL: на расстоянии TRAILING_DISTANCE_PCT от пика
-                        if pos.side == 'SHORT':
-                            # Для SHORT: SL двигается вниз (цена растёт → SL растёт)
-                            new_sl_price = pos.entry_price * (1 - (pos.trailing_peak - config.TRAILING_DISTANCE_PCT) / 100)
-                        else:
-                            # Для LONG: SL двигается вверх (цена растёт → SL растёт)
-                            new_sl_price = pos.entry_price * (1 + (pos.trailing_peak - config.TRAILING_DISTANCE_PCT) / 100)
-
-                        # Проверяем что новый SL лучше текущего
-                        should_update = False
-                        if pos.side == 'SHORT':
-                            # Для SHORT: SL должен быть ниже текущего (двигаться вниз за ценой)
-                            if new_sl_price < pos.stop_loss:
-                                should_update = True
-                        else:
-                            # Для LONG: SL должен быть выше текущего (двигаться вверх за ценой)
-                            if new_sl_price > pos.stop_loss:
-                                should_update = True
-
-                        # Минимальный SL — безубыток + 0.2%
-                        if pos.side == 'SHORT':
-                            min_sl = pos.entry_price * (1 + config.TRAILING_BREAKEVEN_PCT / 100)
-                            if new_sl_price > min_sl:
-                                new_sl_price = min_sl
-                        else:
-                            min_sl = pos.entry_price * (1 - config.TRAILING_BREAKEVEN_PCT / 100)
-                            if new_sl_price < min_sl:
-                                new_sl_price = min_sl
-
-                        if should_update:
-                            new_sl_price = float(bot.exchange.price_to_precision(pos.symbol, new_sl_price))
-                            old_sl = pos.stop_loss
-                            pos.stop_loss = new_sl_price
-                            logger.info(
-                                f"Трейлинг SL {pos.symbol}: {old_sl:.4f} → {new_sl_price:.4f} "
-                                f"(пик: {pos.trailing_peak:+.2f}%)"
-                            )
-
-                            # Отправляем новый SL на биржу
-                            try:
-                                # Удаляем старый SL и ставим новый
-                                await bot.exchange.cancel_all_orders(pos.symbol)
-                                if pos.side == 'SHORT':
-                                    await bot.exchange.create_order(
-                                        pos.symbol, 'stop_market', 'buy', pos.remaining_quantity,
-                                        params={'stopPrice': new_sl_price, 'reduceOnly': True}
-                                    )
-                                else:
-                                    await bot.exchange.create_order(
-                                        pos.symbol, 'stop_market', 'sell', pos.remaining_quantity,
-                                        params={'stopPrice': new_sl_price, 'reduceOnly': True}
-                                    )
-                            except Exception as e:
-                                logger.warning(f"Не удалось обновить SL на бирже для {pos.symbol}: {e}")
-
-                except Exception as e:
-                    logger.error(f"Ошибка трейлинга для {pos.symbol}: {e}")
-
-        except Exception as e:
-            logger.error(f"Ошибка в trailing_stop_loop: {e}")
-
-        await asyncio.sleep(10)
 
 
 class Database:
@@ -815,36 +724,59 @@ class SMCAnalyzer:
         return "NONE"
     
     def detect_fvg(self, ohlcv: List[List]) -> str:
-        """Обнаружение Fair Value Gap.
-        Возвращает: 'BULLISH', 'BEARISH', или '' (пусто).
-        """
+        """Обнаружение Fair Value Gap с проверкой pullback к зоне."""
         if len(ohlcv) < 3:
             return ''
         
-        bullish = False
-        bearish = False
+        current_price = ohlcv[-1][4]
         
-        for i in range(len(ohlcv) - 2):
+        for i in range(len(ohlcv) - 3):  # не берём последнюю свечу
             c1, c2, c3 = ohlcv[i], ohlcv[i + 1], ohlcv[i + 2]
             high1, low1 = c1[2], c1[3]
-            high2, low2 = c2[2], c2[3]
             high3, low3 = c3[2], c3[3]
-            body = high2 - low2
             
-            # Бычий FVG: low3 > high1
-            if low3 > high1 and (low3 - high1) > body * 0.3:
-                bullish = True
+            # Бычий FVG: gap между high свечи 1 и low свечи 3
+            if high1 < low3:
+                # Цена должна вернуться в эту зону (pullback)
+                if high1 * 0.998 <= current_price <= low3 * 1.003:
+                    return 'BULLISH'
             
-            # Медвежий FVG: high3 < low1
-            if high3 < low1 and (low1 - high3) > body * 0.3:
-                bearish = True
-        
-        if bullish:
-            return 'BULLISH'
-        if bearish:
-            return 'BEARISH'
+            # Медвежий FVG
+            if low1 > high3:
+                if high3 * 0.997 <= current_price <= low1 * 1.002:
+                    return 'BEARISH'
         return ''
     
+    def detect_order_block(self, ohlcv: List[List]) -> str:
+        """Обнаружение Order Block с проверкой pullback."""
+        if len(ohlcv) < 10:
+            return ''
+        
+        current_price = ohlcv[-1][4]
+        
+        # Ищем импульсное движение (последние 10 свечей)
+        for i in range(len(ohlcv) - 5, max(0, len(ohlcv) - 15), -1):
+            candle = ohlcv[i]
+            c_open, c_high, c_low, c_close = candle[1], candle[2], candle[3], candle[4]
+            
+            # Бычий OB: красная свеча перед импульсом вверх
+            if c_open > c_close:  # красная
+                # Проверяем что после неё был рост
+                future_closes = [ohlcv[j][4] for j in range(i+1, min(i+4, len(ohlcv)))]
+                if future_closes and max(future_closes) > c_high * 1.002:
+                    # Pullback: цена вернулась к телу этой свечи
+                    if c_low * 0.998 <= current_price <= c_high * 1.003:
+                        return 'BULLISH'
+            
+            # Медвежий OB: зелёная свеча перед импульсом вниз
+            if c_close > c_open:  # зелёная
+                future_closes = [ohlcv[j][4] for j in range(i+1, min(i+4, len(ohlcv)))]
+                if future_closes and min(future_closes) < c_low * 0.998:
+                    if c_low * 0.997 <= current_price <= c_high * 1.002:
+                        return 'BEARISH'
+        return ''
+
+
     async def analyze_symbol(self, symbol: str) -> Dict[str, Any]:
         """
         АНАЛИЗ — 7 ИНДИКАТОРОВ, LONG + SHORT
@@ -914,6 +846,17 @@ class SMCAnalyzer:
                 short_score += 1
                 short_ind['fvg'] = True
             
+            # ═══ 2b. Order Block (на 5m) ═══
+            ob = self.detect_order_block(ohlcv_5m[-20:])
+            if ob == 'BULLISH':
+                long_score += 1
+                long_ind['ob'] = True
+            if ob == 'BEARISH':
+                short_score += 1
+                short_ind['ob'] = True
+            
+            has_smc_structure = bool(fvg) or bool(ob)
+            
             # ═══ 3. EMA 50 Тренд ═══
             ema50 = self.calculate_ema(closes_5m, 50)
             if ema50:
@@ -970,12 +913,13 @@ class SMCAnalyzer:
                     short_ind['volume_spike'] = True
             
             # ═══ Выбираем лучшее направление ═══
-            if long_score >= short_score and long_score >= config.MIN_INDICATORS_SCORE:
+            # СИГНАЛ ВАЛИДЕН ТОЛЬКО ЕСЛИ ЕСТЬ SMC СТРУКТУРА (FVG или OB)
+            if long_score >= short_score and long_score >= config.MIN_INDICATORS_SCORE and has_smc_structure:
                 result['score'] = long_score
                 result['direction'] = 'LONG'
                 result['indicators'] = long_ind
                 result['signal'] = True
-            elif short_score > long_score and short_score >= config.MIN_INDICATORS_SCORE:
+            elif short_score > long_score and short_score >= config.MIN_INDICATORS_SCORE and has_smc_structure:
                 result['score'] = short_score
                 result['direction'] = 'SHORT'
                 result['indicators'] = short_ind
@@ -1172,7 +1116,8 @@ class SmartMoneyBot:
         try:
             stats = self.db.get_all_statistics()
             total_pnl = float(stats.get('total_pnl') or 0.0)
-            virtual_equity = max(config.DEPOSIT + total_pnl, 0.0)
+            # Гарантируем минимум DEPOSIT даже если БД показывает убытки
+            virtual_equity = max(config.DEPOSIT + total_pnl, config.DEPOSIT * 0.5)
 
             locked_margin = sum(p.amount_usdt for p in self.positions.values())
             free_equity = virtual_equity - locked_margin
@@ -1527,6 +1472,35 @@ class SmartMoneyBot:
         except Exception as e:
             logger.error(f"Ошибка частичного закрытия {position.symbol}: {e}")
 
+
+    async def _update_exchange_sl(self, position: Position, new_sl_price: float):
+        """Обновляет стоп-лосс на бирже: отменяет старые ордера и ставит новый."""
+        try:
+            new_sl_price = float(self.exchange.price_to_precision(position.symbol, new_sl_price))
+            qty_rounded = float(self.exchange.amount_to_precision(position.symbol, position.remaining_quantity))
+            if qty_rounded <= 0:
+                return
+
+            # Отменяем все существующие ордера по символу
+            try:
+                await self.exchange.cancel_all_orders(position.symbol)
+            except Exception:
+                pass
+
+            # Ставим новый SL
+            close_side = 'BUY' if position.side == 'SHORT' else 'SELL'
+            await self.exchange.create_order(
+                symbol=position.symbol,
+                type='STOP_MARKET',
+                side=close_side,
+                amount=qty_rounded,
+                params={'stopPrice': new_sl_price, 'reduceOnly': True}
+            )
+            position.stop_loss = new_sl_price
+            logger.info(f"SL обновлён {position.symbol}: → {new_sl_price}")
+        except Exception as e:
+            logger.error(f"Ошибка переноса SL {position.symbol}: {e}")
+
     async def monitor_positions(self):
         """Мониторинг позиций — Трейлинг, Частичные TP и Динамический SL"""
         for position_id, position in list(self.positions.items()):
@@ -1676,8 +1650,6 @@ class SmartMoneyBot:
                     continue
 
 
-                # 7. ДИНАМИЧЕСКИЙ SL (передаём price_change_pct — без плеча!)
-
                 # 8. Проверка времени позиции
                 await self.check_position_timeout(position)
 
@@ -1723,11 +1695,30 @@ class SmartMoneyBot:
                 continue
             
             # Анализ
-            smc_result = await self.smc_analyzer.analyze_symbol(symbol)
+            try:
+                smc_result = await self.smc_analyzer.analyze_symbol(symbol)
+            except Exception as e:
+                logger.debug(f"Пропуск {symbol}: {e}")
+                continue
             
             # Проверяем, чтобы score был >= MIN_INDICATORS_SCORE (от 5/7)
             if smc_result['signal'] and smc_result['score'] >= config.MIN_INDICATORS_SCORE:
                 logger.info(f"СИГНАЛ найден: {symbol} (score: {smc_result['score']}/{config.TOTAL_INDICATORS})")
+                
+                # Фильтр Funding Rate (защита от толпы)
+                try:
+                    funding_info = await self.exchange.fetch_funding_rate(symbol)
+                    funding_rate = float(funding_info.get('fundingRate', 0))
+                    direction = smc_result.get('direction', 'LONG')
+                    
+                    if direction == 'LONG' and funding_rate > 0.0005:
+                        logger.info(f"Пропуск LONG {symbol}: толпа в лонгах (funding={funding_rate:.4%})")
+                        continue
+                    elif direction == 'SHORT' and funding_rate < -0.0005:
+                        logger.info(f"Пропуск SHORT {symbol}: толпа в шортах (funding={funding_rate:.4%})")
+                        continue
+                except Exception:
+                    pass  # если API не поддерживает — пропускаем фильтр
                 
                 # Получение текущей цены для входа
                 ticker = await self.exchange.fetch_ticker(symbol)
@@ -2293,8 +2284,7 @@ class SmartMoneyBot:
 
     async def run_telegram_bot(self):
         """Запуск Telegram бота с авто-перезапуском"""
-        from telegram.ext import MessageHandler, filters
-
+        
         app = None
 
         while self.is_running:
@@ -2407,6 +2397,26 @@ class SmartMoneyBot:
             finally:
                 logger.warning(f"Task '{name}' finished!")
 
+        # Уведомление о запуске
+        try:
+            stats = self.db.get_all_statistics()
+            total_pnl = float(stats.get('total_pnl') or 0.0)
+            virtual_eq = max(config.DEPOSIT + total_pnl, config.DEPOSIT * 0.5)
+            await self.send_telegram_message(
+                f"🟢 БОТ ВКЛЮЧЁН\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"💰 Депозит: ${config.DEPOSIT:.2f}\n"
+                f"📊 Виртуальный баланс: ${virtual_eq:.2f}\n"
+                f"⚙️ Плечо: x{config.LEVERAGE}\n"
+                f"🛡 SL: {config.STOP_LOSS_PCT}% ({config.STOP_LOSS_PCT * config.LEVERAGE:.0f}% ROE)\n"
+                f"🎯 TP: {config.PARTIAL_TP1_PCT:.0f}% / {config.PARTIAL_TP2_PCT:.0f}% / {config.PARTIAL_TP3_PCT:.0f}% ROE\n"
+                f"📡 Монет: {len(self.symbols_to_scan)}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"SMART MONEY BOT v2.0"
+            )
+        except Exception as e:
+            logger.warning(f"Не удалось отправить стартовое сообщение: {e}")
+
         tasks = [
             asyncio.create_task(task_with_log("scanner", self.run_scanner_loop())),
             asyncio.create_task(task_with_log("monitoring", self.run_monitoring_loop())),
@@ -2414,7 +2424,6 @@ class SmartMoneyBot:
             asyncio.create_task(task_with_log("hourly_report", self.run_hourly_report_loop())),
             asyncio.create_task(task_with_log("telegram", self.run_telegram_bot())),
             asyncio.create_task(task_with_log("fear_greed", check_fear_greed_index(self))),
-            asyncio.create_task(task_with_log("trailing_stop", trailing_stop_loop(self)))
         ]
         
         # Ждём завершения всех задач (gather завершится только если все упадут)
