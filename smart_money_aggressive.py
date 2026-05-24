@@ -1789,20 +1789,39 @@ async def monitor_positions(self):
 
 
     async def check_position_timeout(self, position: Position):
-        """Проверка времени позиции"""
-        now = datetime.now(timezone.utc)
-        duration = now - position.timestamp
-        duration_minutes = duration.total_seconds() / 60
+        """Проверка слабых зависших позиций"""
 
-        # Для убыточных позиций — закрываем через 30 минут если нет признаков разворота
+        try:
+            now = datetime.now(timezone.utc)
+            duration = now - position.timestamp
+            duration_minutes = duration.total_seconds() / 60
 
-        # Общий таймаут для всех позиций
-        if duration >= timedelta(hours=config.POSITION_TIMEOUT_HOURS):
-            logger.info(f"Закрытие позиции {position.symbol} по таймауту ({config.POSITION_TIMEOUT_HOURS}ч)")
-            await self.send_telegram_message(
-                f"⏱ Истекло {config.POSITION_TIMEOUT_HOURS} ч для {position.symbol}. Автоматическое закрытие по правилам бота."
+            # Только для слабых позиций
+            if duration_minutes < config.MOMENTUM_EXIT_MINUTES:
+                return
+
+            current_price = await self.get_current_price(position.symbol)
+            pnl_pct = self.calculate_position_roe(position, current_price)
+
+            # Не трогаем хорошие позиции
+            if pnl_pct >= config.MOMENTUM_MIN_PROFIT:
+                return
+
+            logger.info(
+                f"MOMENTUM EXIT: {position.symbol} | "
+                f"{duration_minutes:.1f}m | PNL={pnl_pct:.2f}%"
             )
+
+            await self.send_telegram_message(
+                f"⚠️ Weak momentum exit: {position.symbol}\n"
+                f"Возраст: {duration_minutes:.0f} мин\n"
+                f"PNL: {pnl_pct:.2f}%"
+            )
+
             await self.close_position(position.id)
+
+        except Exception as e:
+            logger.error(f"Ошибка timeout-проверки: {e}")
 
     async def scan_market(self):
         """Сканирование рынка на наличие сигналов"""
