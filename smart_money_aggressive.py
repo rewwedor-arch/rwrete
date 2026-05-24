@@ -1574,6 +1574,12 @@ class SmartMoneyBot:
                 ticker = await self.exchange.fetch_ticker(position.symbol)
                 current_price = ticker['last']
 
+                # Сначала рассчитываем pnl
+                pnl_pct = self.calculate_position_roe(
+                    position,
+                    current_price
+                )
+
                 # Автоматический перевод в безубыток
                 if (
                     pnl_pct >= 0.8
