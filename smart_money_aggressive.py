@@ -1276,8 +1276,14 @@ class SmartMoneyBot:
             total_pnl = stats.get('total_pnl', 0) or 0
             virtual_balance = max(10.0, config.DEPOSIT + total_pnl)
             
-            # Бот использует минимум из реального свободного баланса и своего виртуального депозита
-            working_balance = min(free_balance, virtual_balance)
+            # Считаем сколько маржи УЖЕ занято открытыми позициями бота
+            used_margin_by_bot = sum(p.amount_usdt for p in self.positions.values())
+            
+            # Виртуальный свободный баланс бота
+            bot_free_balance = max(0, virtual_balance - used_margin_by_bot)
+            
+            # Бот использует минимум из реального свободного баланса и своего виртуального свободного баланса
+            working_balance = min(free_balance, bot_free_balance)
 
             if working_balance < config.MIN_SLOT_USDT:
                 logger.warning(
@@ -1297,12 +1303,9 @@ class SmartMoneyBot:
 
             risk_percent = risk_map.get(score, 0.20)
 
-            # Размер слота - это часть от виртуального баланса, выделенная на одну сделку
-            slot_size = virtual_balance / MAX_OPEN_POSITIONS
-
-            # Высчитываем сумму для входа из размера слота
+            # Высчитываем сумму для входа из рабочего баланса
             amount_usdt = min(
-                slot_size * risk_percent,
+                working_balance * risk_percent,
                 free_balance * 0.95  # Физическая защита от нехватки маржи
             )
 
@@ -1869,27 +1872,31 @@ class SmartMoneyBot:
         new_sl_price = None
         new_level = position.dynamic_sl_level
 
-        # Пороги для агрессивного скальпинга (исправленные, чтобы отбивать комиссии и давать жирный профит)
-        if price_change_pct >= 2.5 and position.dynamic_sl_level < 3:
-            # +187% ROE — мощный профит
+        # Пороги для агрессивного скальпинга (исправленные, чтобы не душить сделку)
+        if price_change_pct >= 1.0 and position.dynamic_sl_level < 3:
+            # +75% ROE — мощный профит обеспечен
             if position.side == 'SHORT':
-                new_sl_price = position.entry_price * (1 - 0.015)
+                new_sl_price = position.entry_price * (1 - 0.005)
             else:
-                new_sl_price = position.entry_price * (1 + 0.015)
+                new_sl_price = position.entry_price * (1 + 0.005)
             new_level = 3
-        elif price_change_pct >= 1.5 and position.dynamic_sl_level < 2:
-            # +112% ROE — фиксируем +60% ROE
+        elif price_change_pct >= 0.6 and position.dynamic_sl_level < 2:
+            # +45% ROE — ПРОФИ: ФИКСИРУЕМ 50% ПРИБЫЛИ
+            half_qty = position.remaining_quantity * 0.5
+            await self.close_partial_position(position, half_qty, current_price)
+            
+            # И фиксируем плюсовой стоп
             if position.side == 'SHORT':
-                new_sl_price = position.entry_price * (1 - 0.008)
+                new_sl_price = position.entry_price * (1 - 0.002)
             else:
-                new_sl_price = position.entry_price * (1 + 0.008)
+                new_sl_price = position.entry_price * (1 + 0.002)
             new_level = 2
-        elif price_change_pct >= 0.8 and position.dynamic_sl_level < 1:
-            # +60% ROE — перевод в уверенный плюс (окупает комиссии и дает +18% ROE)
+        elif price_change_pct >= 0.4 and position.dynamic_sl_level < 1:
+            # +30% ROE — перевод в безубыток
             if position.side == 'SHORT':
-                new_sl_price = position.entry_price * (1 - 0.0025)
+                new_sl_price = position.entry_price * (1 - 0.0005)
             else:
-                new_sl_price = position.entry_price * (1 + 0.0025)
+                new_sl_price = position.entry_price * (1 + 0.0005)
             new_level = 1
 
         if not new_sl_price:
