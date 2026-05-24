@@ -2372,7 +2372,8 @@ class SmartMoneyBot:
         keyboard = [
             ['📊 Отчёт', '📋 Позиции'],
             ['🟢 Старт', '🔴 Стоп'],
-            ['🛑 Закрыть все', '📈 Статистика']
+            ['🛑 Закрыть все', '📈 Статистика'],
+            ['🔄 Сброс PnL']
         ]
         return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -2409,6 +2410,17 @@ class SmartMoneyBot:
             await self.cmd_close_all(update, context)
         elif text == '📈 Статистика':
             await self.cmd_stats(update, context)
+        elif text == '🔄 Сброс PnL':
+            await self.cmd_reset(update, context)
+
+    async def cmd_reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            self.db.execute_query("UPDATE statistics SET total_pnl=0, profitable=0, total_trades=0, losing_trades=0", commit=True)
+            self.db.execute_query("UPDATE daily_statistics SET total_pnl=0, profitable_trades=0, losing_trades=0, total_trades=0 WHERE date=date('now')", commit=True)
+            await self._safe_reply(update, "♻️ Статистика PnL успешно сброшена! Ваш виртуальный баланс снова равен начальному депозиту.")
+            logger.info("Статистика PnL сброшена пользователем.")
+        except Exception as e:
+            await self._safe_reply(update, f"❌ Ошибка сброса: {e}")
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_chat:
