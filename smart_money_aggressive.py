@@ -115,7 +115,7 @@ ENABLE_SESSION_FILTER = True
 MIN_ADX = 20
 MIN_VOLUME_RATIO = 2.0
 MIN_RR_RATIO = 2.5
-MAX_OPEN_POSITIONS = 3
+MAX_OPEN_POSITIONS = 5
 
 def institutional_filter(
     adx,
@@ -175,7 +175,7 @@ LAST_LOSS_TIME = 0
 LOSS_COOLDOWN_SECONDS = 1800
 
 # ===== HIGH LEVERAGE PROTECTION =====
-MAX_OPEN_POSITIONS = 3
+MAX_OPEN_POSITIONS = 5
 USE_ISOLATED_MARGIN = True
 ENABLE_DYNAMIC_SL = True
 ENABLE_TRAILING_PROFIT_LOCK = True
@@ -1285,63 +1285,34 @@ class SmartMoneyBot:
                 )
                 return 0, 0, 0
 
-            # Профессиональный риск-менеджмент для маленького депозита
-            # Больше бот НЕ сможет открыть сделок на сумму выше депозита
-            # и не будет использовать 50-100% баланса в одной позиции.
-
-            open_positions = max(1, len(self.positions))
-
-            # Чем больше открытых позиций — тем меньше риск на новую
-            base_risk_map = {
-                2: 0.04,
-                3: 0.05,
-                4: 0.06,
-                5: 0.08,
-                6: 0.10,
-                7: 0.12
+            # Динамический риск по силе сигнала (от 15% до 50% для разгона)
+            risk_map = {
+                2: 0.15,
+                3: 0.25,
+                4: 0.35,
+                5: 0.50,
+                6: 0.50,
+                7: 0.50
             }
 
-            risk_percent = base_risk_map.get(score, 0.05)
+            risk_percent = risk_map.get(score, 0.20)
 
-            # Защита от перегруза депозита
-            if open_positions >= 2:
-                risk_percent *= 0.7
+            # Размер слота - это часть от виртуального баланса, выделенная на одну сделку
+            slot_size = virtual_balance / MAX_OPEN_POSITIONS
 
-            if open_positions >= 4:
-                risk_percent *= 0.5
-
-            # Никогда не используем больше 15% депозита как маржу
-            risk_percent = min(risk_percent, 0.15)
-
-            # Расчёт маржи
-            amount_usdt = working_balance * risk_percent
-
-            # Жёсткий лимит: суммарная маржа всех позиций <= 85% депозита
-            used_margin = sum(
-                getattr(pos, 'amount_usdt', 0)
-                for pos in self.positions.values()
-            )
-
-            max_allowed_margin = working_balance * 0.85
-            remaining_margin = max(0, max_allowed_margin - used_margin)
-
+            # Высчитываем сумму для входа из размера слота
             amount_usdt = min(
-                amount_usdt,
-                remaining_margin,
-                free_balance * 0.90
+                slot_size * risk_percent,
+                free_balance * 0.95  # Физическая защита от нехватки маржи
             )
 
-            # Минимальный размер позиции
             if amount_usdt < config.MIN_SLOT_USDT:
-                if remaining_margin < config.MIN_SLOT_USDT:
-                    logger.warning(
-                        f"Недостаточно свободной маржи для новой позиции | used=${used_margin:.2f}"
-                    )
-                    return 0, 0, 0
-
                 amount_usdt = config.MIN_SLOT_USDT
 
-            leverage = min(config.LEVERAGE, 125)
+            if amount_usdt > free_balance:
+                amount_usdt = free_balance * 0.95
+
+            leverage = config.LEVERAGE
 
             # Защита от отрицательных или нулевых значений
             if entry_price <= 0:
@@ -1898,27 +1869,27 @@ class SmartMoneyBot:
         new_sl_price = None
         new_level = position.dynamic_sl_level
 
-        # Пороги для агрессивного скальпинга (исправленные, чтобы не душить сделку)
-        if price_change_pct >= 1.0 and position.dynamic_sl_level < 3:
-            # +75% ROE — мощный профит обеспечен
+        # Пороги для агрессивного скальпинга (исправленные, чтобы отбивать комиссии и давать жирный профит)
+        if price_change_pct >= 2.5 and position.dynamic_sl_level < 3:
+            # +187% ROE — мощный профит
             if position.side == 'SHORT':
-                new_sl_price = position.entry_price * (1 - 0.005)
+                new_sl_price = position.entry_price * (1 - 0.015)
             else:
-                new_sl_price = position.entry_price * (1 + 0.005)
+                new_sl_price = position.entry_price * (1 + 0.015)
             new_level = 3
-        elif price_change_pct >= 0.6 and position.dynamic_sl_level < 2:
-            # +45% ROE — фиксируем плюсовой стоп
+        elif price_change_pct >= 1.5 and position.dynamic_sl_level < 2:
+            # +112% ROE — фиксируем +60% ROE
             if position.side == 'SHORT':
-                new_sl_price = position.entry_price * (1 - 0.002)
+                new_sl_price = position.entry_price * (1 - 0.008)
             else:
-                new_sl_price = position.entry_price * (1 + 0.002)
+                new_sl_price = position.entry_price * (1 + 0.008)
             new_level = 2
-        elif price_change_pct >= 0.4 and position.dynamic_sl_level < 1:
-            # +30% ROE — перевод в безубыток
+        elif price_change_pct >= 0.8 and position.dynamic_sl_level < 1:
+            # +60% ROE — перевод в уверенный плюс (окупает комиссии и дает +18% ROE)
             if position.side == 'SHORT':
-                new_sl_price = position.entry_price * (1 - 0.0005)
+                new_sl_price = position.entry_price * (1 - 0.0025)
             else:
-                new_sl_price = position.entry_price * (1 + 0.0005)
+                new_sl_price = position.entry_price * (1 + 0.0025)
             new_level = 1
 
         if not new_sl_price:
