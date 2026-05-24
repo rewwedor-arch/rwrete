@@ -1566,7 +1566,7 @@ class SmartMoneyBot:
         ).total_seconds() / 60
 
 
-async def monitor_positions(self):
+    async def monitor_positions(self):
         """Мониторинг позиций — Трейлинг, Частичные TP и Динамический SL"""
         for position_id, position in list(self.positions.items()):
             try:
