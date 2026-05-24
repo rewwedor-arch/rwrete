@@ -1166,12 +1166,10 @@ class SmartMoneyBot:
             base_slot = virtual_equity / optimal_slots # use virtual_equity to not shrink sizes
 
             weight = max(score, config.MIN_INDICATORS_SCORE) / 5.0
-            amount_usdt = base_slot * weight
-
-            amount_usdt = min(amount_usdt, free_equity)
+            amount_usdt = base_slot * weight            amount_usdt = min(amount_usdt, free_equity)
             if amount_usdt < config.MIN_SLOT_USDT:
                 if free_equity >= config.MIN_SLOT_USDT:
-                    amount_usdt = free_equity
+                    amount_usdt = config.MIN_SLOT_USDT  # FIX: Set to MIN_SLOT, not ALL free equity!
                 else:
                     return 0, 0, 0
 
@@ -2350,6 +2348,8 @@ class SmartMoneyBot:
                         app.run_polling(
                             allowed_updates=Update.ALL_TYPES,
                             drop_pending_updates=True,
+                            stop_signals=None,
+                            close_loop=False
                         )
                     except Exception as e:
                         polling_error[0] = e
