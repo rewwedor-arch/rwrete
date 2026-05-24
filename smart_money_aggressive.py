@@ -62,7 +62,7 @@ class StrategyConfig:
     # Финансовые параметры
     DEPOSIT: float = 50.0  # Стартовый депозит USDT
     ENTRY_AMOUNT: float = 50.0  # Базовая сумма (используется если REINVEST=False)
-    LEVERAGE: int = 50  # Максимальное плечо (x45)
+    LEVERAGE: int = 75  # Максимальное плечо (x45)
 
     # Риск-менеджмент — ШИРОКИЙ КОРИДОР для высоковолатильных альтов
     STOP_LOSS_PCT: float = 0.8  # SL -1.2% от цены (-54% ROE)
@@ -102,22 +102,25 @@ class StrategyConfig:
 
     # Выход по откату от пика (в % ROE)
     MIN_PEAK_PNL_TO_TRACK: float = 12.0
-    PEAK_DRAWDOWN_CLOSE_PCT: float = 4.0
+    PEAK_DRAWDOWN_CLOSE_PCT: float = 2.5
     
     # Трейлинг
-    TRAILING_ACTIVATE_PCT: float = 8.0
+    TRAILING_ACTIVATE_PCT: float = 18.0
     TRAILING_DRAWDOWN_CLOSE_PCT: float = 4.0
-    TRAILING_DISTANCE_PCT: float = 2.0
+    TRAILING_DISTANCE_PCT: float = 6.0
     TRAILING_BREAKEVEN_PCT: float = 0.1
+    # Экстренное закрытие плохой сделки
+    MAX_POSITION_LOSS_PCT: float = -22.0
+
     
     # Частичные TP (в % ROE)
     PARTIAL_TP_ENABLED = True
-    PARTIAL_TP1_PCT: float = 15.0   # Фиксируем 40%
-    PARTIAL_TP2_PCT: float = 30.0   # Фиксируем 30%
-    PARTIAL_TP3_PCT: float = 60.0  # Фиксируем остаток, оставляем раннер
+    PARTIAL_TP1_PCT: float = 18.0   # Фиксируем 40%
+    PARTIAL_TP2_PCT: float = 45.0   # Фиксируем 30%
+    PARTIAL_TP3_PCT: float = 120.0  # Фиксируем остаток, оставляем раннер
 
     # Время позиции
-    POSITION_TIMEOUT_HOURS: float = 0.6
+    POSITION_TIMEOUT_HOURS: float = 1.8
 
 config = StrategyConfig()
 
