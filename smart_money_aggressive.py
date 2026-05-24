@@ -1033,6 +1033,19 @@ class SMCAnalyzer:
             elif htf_trend == 'SHORT':
                 short_score += 1; short_ind['htf_align'] = True
 
+            # 11. Open Interest / Funding Rate (PRO Institutional Logic)
+            if long_score >= 3 or short_score >= 3:
+                try:
+                    funding = await self.exchange.fetch_funding_rate(symbol)
+                    fr = funding.get('fundingRate', 0)
+                    if fr:
+                        if float(fr) > 0.0005:  # Толпа в лонгах -> маркетмейкер пойдет вниз
+                            short_score += 1; short_ind['high_funding'] = True
+                        elif float(fr) < -0.0005: # Толпа в шортах -> маркетмейкер пойдет вверх
+                            long_score += 1; long_ind['high_funding'] = True
+                except:
+                    pass
+
             # ========== INSTITUTIONAL ENTRY SYSTEM ==========
             # Тренд (EMA50) + Структура (BOS/FVG/OB) + Моментум (MACD/RSI)
             is_uptrend = current_price > ema50[-1]
@@ -1288,35 +1301,36 @@ class SmartMoneyBot:
             # Считаем сколько маржи УЖЕ занято открытыми позициями бота
             used_margin_by_bot = sum(p.amount_usdt for p in self.positions.values())
             
+            # Динамический риск по силе сигнала (от 15% до 35%)
+            # Считаем от ПОЛНОГО виртуального баланса, чтобы сделки были одинакового размера!
+            risk_map = {
+                2: 0.15,
+                3: 0.20,
+                4: 0.25,
+                5: 0.35,
+                6: 0.35,
+                7: 0.35
+            }
+            
+            risk_percent = risk_map.get(score, 0.20)
+            
+            # Идеальный размер позиции
+            desired_amount = virtual_balance * risk_percent
+            
             # Виртуальный свободный баланс бота
             bot_free_balance = max(0, virtual_balance - used_margin_by_bot)
             
-            # Бот использует минимум из реального свободного баланса и своего виртуального свободного баланса
-            working_balance = min(free_balance, bot_free_balance)
-
-            if working_balance < config.MIN_SLOT_USDT:
+            # Фактически доступный баланс
+            actual_free = min(free_balance * 0.95, bot_free_balance)
+            
+            if actual_free < config.MIN_SLOT_USDT:
                 logger.warning(
-                    f"Рабочий баланс ${working_balance:.2f} (Свободно: ${free_balance:.2f}) < минимума ${config.MIN_SLOT_USDT}"
+                    f"Свободный баланс бота ${actual_free:.2f} < минимума ${config.MIN_SLOT_USDT}"
                 )
                 return 0, 0, 0
 
-            # Динамический риск по силе сигнала (от 15% до 50% для разгона)
-            risk_map = {
-                2: 0.15,
-                3: 0.25,
-                4: 0.35,
-                5: 0.50,
-                6: 0.50,
-                7: 0.50
-            }
-
-            risk_percent = risk_map.get(score, 0.20)
-
-            # Высчитываем сумму для входа из рабочего баланса
-            amount_usdt = min(
-                working_balance * risk_percent,
-                free_balance * 0.95  # Физическая защита от нехватки маржи
-            )
+            # Берем минимум из желаемого и физически доступного
+            amount_usdt = min(desired_amount, actual_free)
 
             if amount_usdt < config.MIN_SLOT_USDT:
                 amount_usdt = config.MIN_SLOT_USDT
