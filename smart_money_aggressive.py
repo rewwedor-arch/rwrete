@@ -66,7 +66,7 @@ class StrategyConfig:
     LEVERAGE: int = 75  # Максимальное плечо для агрессивного разгона
 
     # Риск-менеджмент — ШИРОКИЙ КОРИДОР для высоковолатильных альтов
-    STOP_LOSS_PCT: float = 0.7  # Быстрый стоп для защиты депозита
+    STOP_LOSS_PCT: float = 0.24  # Быстрый стоп для защиты депозита
     TAKE_PROFIT_PCT: float = 1.0  
     TAKE_PROFIT: float = TAKE_PROFIT_PCT  
     TP2_PCT: float = 2.0  
@@ -111,8 +111,8 @@ class StrategyConfig:
     PEAK_DRAWDOWN_CLOSE_PCT: float = 2.5
 
     # Трейлинг
-    TRAILING_ACTIVATE_PCT: float = 18.0
-    TRAILING_DRAWDOWN_CLOSE_PCT: float = 4.0
+    TRAILING_ACTIVATE_PCT: float = 20.0
+    TRAILING_DRAWDOWN_CLOSE_PCT: float = 8.0
     TRAILING_DISTANCE_PCT: float = 6.0
     TRAILING_BREAKEVEN_PCT: float = 0.1
     # Экстренное закрытие плохой сделки
@@ -121,9 +121,9 @@ class StrategyConfig:
 
     # Частичные TP (в % ROE)
     PARTIAL_TP_ENABLED = True
-    PARTIAL_TP1_PCT: float = 18.0   # Фиксируем 40%
-    PARTIAL_TP2_PCT: float = 45.0   # Фиксируем 30%
-    PARTIAL_TP3_PCT: float = 120.0  # Фиксируем остаток, оставляем раннер
+    PARTIAL_TP1_PCT: float = 22.0   # Фиксируем 40%
+    PARTIAL_TP2_PCT: float = 55.0   # Фиксируем 30%
+    PARTIAL_TP3_PCT: float = 90.0  # Фиксируем остаток, оставляем раннер
 
     # Время позиции
     POSITION_TIMEOUT_HOURS: float = 1.8
@@ -1663,6 +1663,19 @@ class SmartMoneyBot:
                     position.peak_pnl = pnl_pct
 
                 pair = position.symbol.replace('/USDT', '')
+
+                
+                # HARD EMERGENCY EXIT
+                if pnl_pct <= -18:
+                    message = (
+                        f"🚨 HARD EMERGENCY EXIT | {pair}\n"
+                        f"ROE: {pnl_pct:+.1f}%\n"
+                        f"Причина: критический убыток\n"
+                        f"Позиция закрыта мгновенно"
+                    )
+                    await self.send_telegram_message(message)
+                    await self.close_position(position_id)
+                    continue
 
                 # 3.5 Программный STOP LOSS (сравниваем price_change_pct с config.STOP_LOSS_PCT, т.к. стоп задан в % цены, а не ROE)
                 if price_change_pct <= -config.STOP_LOSS_PCT:
