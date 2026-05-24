@@ -62,14 +62,14 @@ class StrategyConfig:
     # Финансовые параметры
     DEPOSIT: float = 50.0  # Стартовый депозит USDT
     ENTRY_AMOUNT: float = 50.0  # Базовая сумма (используется если REINVEST=False)
-    LEVERAGE: int = 75  # Максимальное плечо (x45)
+    LEVERAGE: int = 75  # Максимальное плечо для агрессивного разгона
 
     # Риск-менеджмент — ШИРОКИЙ КОРИДОР для высоковолатильных альтов
-    STOP_LOSS_PCT: float = 0.8  # SL -1.2% от цены (-54% ROE)
-    TAKE_PROFIT_PCT: float = 0.45  
+    STOP_LOSS_PCT: float = 0.7  # Быстрый стоп для защиты депозита
+    TAKE_PROFIT_PCT: float = 1.0  
     TAKE_PROFIT: float = TAKE_PROFIT_PCT  
-    TP2_PCT: float = 0.9  
-    TP3_PCT: float = 1.8  
+    TP2_PCT: float = 2.0  
+    TP3_PCT: float = 4.0  
 
     # Цели
     DAILY_TARGET_MIN: float = 10.0  # Минимальная цель в день %
@@ -93,6 +93,11 @@ class StrategyConfig:
     PROFIT_ALERT_15: float = 150.0   # +150% ROE
     PROFIT_ALERT_40: float = 300.0   # +300% ROE
     DRAWDOWN_ALERT: float = 12.0
+
+    # Momentum exit — закрытие слабых зависших сделок
+    MOMENTUM_EXIT_MINUTES: int = 40
+    MOMENTUM_MIN_PROFIT: float = 0.3
+    MOMENTUM_MIN_ADX: float = 18.0
 
     # ===================================================================
     # ПОРТФЕЛЬНАЯ СТРАТЕГИЯ
@@ -644,10 +649,12 @@ class SMCAnalyzer:
             plus_di.append(pdi)
             minus_di.append(mdi)
 
-            if pdi + mdi > 0:
-                dx_val = abs(pdi - mdi) / (pdi + mdi) * 100
-            else:
+            denominator = pdi + mdi
+
+            if denominator <= 0:
                 dx_val = 0
+            else:
+                dx_val = abs(pdi - mdi) / denominator * 100
             dx.append(dx_val)
 
             adx_val = (adx[-1] * (period - 1) + dx_val) / period
@@ -1551,7 +1558,15 @@ class SmartMoneyBot:
 
         return price_change_pct * position.leverage
 
-    async def monitor_positions(self):
+    
+    def get_position_age_minutes(self, position):
+        """Возраст позиции в минутах"""
+        return (
+            datetime.now(timezone.utc) - position.timestamp
+        ).total_seconds() / 60
+
+
+async def monitor_positions(self):
         """Мониторинг позиций — Трейлинг, Частичные TP и Динамический SL"""
         for position_id, position in list(self.positions.items()):
             try:
@@ -1559,11 +1574,67 @@ class SmartMoneyBot:
                 ticker = await self.exchange.fetch_ticker(position.symbol)
                 current_price = ticker['last']
 
+                # Автоматический перевод в безубыток
+                if (
+                    pnl_pct >= 0.8
+                    and position.dynamic_sl_level == 0
+                ):
+                    position.stop_loss = position.entry_price
+                    position.dynamic_sl_level = 1
+
+                    logger.info(
+                        f"BREAKEVEN ACTIVATED: {position.symbol}"
+                    )
+
                 # 2. Корректный расчет ROE
                 pnl_pct = self.calculate_position_roe(
                     position,
                     current_price
                 )
+
+                # Momentum Exit — закрытие слабых зависших сделок
+                position_age = self.get_position_age_minutes(position)
+
+                try:
+                    ohlcv = await self.exchange.fetch_ohlcv(
+                        position.symbol,
+                        timeframe='5m',
+                        limit=40
+                    )
+
+                    highs = [x[2] for x in ohlcv]
+                    lows = [x[3] for x in ohlcv]
+                    closes = [x[4] for x in ohlcv]
+
+                    adx_values = self.indicators.calculate_adx(
+                        highs,
+                        lows,
+                        closes
+                    )
+
+                    current_adx = adx_values[-1] if adx_values else 0
+
+                except Exception:
+                    current_adx = 0
+
+                if (
+                    position_age > config.MOMENTUM_EXIT_MINUTES
+                    and pnl_pct < config.MOMENTUM_MIN_PROFIT
+                    and current_adx < config.MOMENTUM_MIN_ADX
+                ):
+                    logger.info(
+                        f"MOMENTUM EXIT: {position.symbol} | "
+                        f"Age={position_age:.1f}m | "
+                        f"PNL={pnl_pct:.2f}% | "
+                        f"ADX={current_adx:.1f}"
+                    )
+
+                    await self.close_position(
+                        position.symbol,
+                        "Momentum dead"
+                    )
+
+                    continue
 
                 if position.side == 'SHORT':
                     price_change_pct = (
