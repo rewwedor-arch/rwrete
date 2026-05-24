@@ -107,6 +107,8 @@ class StrategyConfig:
     # Трейлинг
     TRAILING_ACTIVATE_PCT: float = 20.0
     TRAILING_DRAWDOWN_CLOSE_PCT: float = 10.0
+    TRAILING_DISTANCE_PCT: float = 5.0
+    TRAILING_BREAKEVEN_PCT: float = 0.2
     
     # Частичные TP (в % ROE)
     PARTIAL_TP_ENABLED = True
@@ -2264,31 +2266,11 @@ class SmartMoneyBot:
         )
         await self.send_telegram_message("🔴 Бот выключен оператором. Новые сделки не открываются.")
 
-    def setup_telegram_handlers(self):
-        """Настройка обработчиков Telegram команд"""
-        from telegram.ext import MessageHandler, filters
-        
-        self.app = Application.builder().token(self.telegram_token).build()
-        
-        self.app.add_handler(CommandHandler("start", self.cmd_start))
-        self.app.add_handler(CommandHandler("balance", self.cmd_balance))
-        self.app.add_handler(CommandHandler("positions", self.cmd_positions))
-        self.app.add_handler(CommandHandler("signals", self.cmd_signals))
-        self.app.add_handler(CommandHandler("close", self.cmd_close))
-        self.app.add_handler(CommandHandler("close_all", self.cmd_close_all))
-        self.app.add_handler(CommandHandler("start_bot", self.cmd_start_bot))
-        self.app.add_handler(CommandHandler("stop_bot", self.cmd_stop_bot))
-        self.app.add_handler(CommandHandler("emergency", self.cmd_emergency))
-        self.app.add_handler(CommandHandler("daily_report", self.cmd_daily_report))
-        self.app.add_handler(CommandHandler("stats", self.cmd_stats))
-        
-        # Обработчик текстовых кнопок
-        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
-
     async def run_telegram_bot(self):
         """Запуск Telegram бота с авто-перезапуском"""
-        import threading
         from telegram.ext import MessageHandler, filters
+
+        app = None
 
         while self.is_running:
             try:
@@ -2302,7 +2284,6 @@ class SmartMoneyBot:
                     .build()
                 )
 
-                # Регистрация обработчиков
                 app.add_handler(CommandHandler("start", self.cmd_start))
                 app.add_handler(CommandHandler("balance", self.cmd_balance))
                 app.add_handler(CommandHandler("positions", self.cmd_positions))
@@ -2317,7 +2298,6 @@ class SmartMoneyBot:
                 app.add_handler(CommandHandler("stats", self.cmd_stats))
                 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
 
-                # Меню команд
                 try:
                     from telegram import BotCommand
                     await app.bot.set_my_commands([
@@ -2338,58 +2318,35 @@ class SmartMoneyBot:
                     logger.warning(f"Не удалось установить меню: {e}")
 
                 self.app = app
-                logger.info("Telegram бот запускается в отдельном потоке...")
+                logger.info("Telegram бот запускается асинхронно...")
 
-                # Запускаем polling в отдельном потоке
-                polling_done = threading.Event()
-                polling_error = [None]
+                await app.initialize()
+                await app.start()
+                await app.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
-                def run_polling():
-                    try:
-                        app.run_polling(
-                            allowed_updates=Update.ALL_TYPES,
-                            drop_pending_updates=True,
-                            stop_signals=None,
-                            close_loop=False
-                        )
-                    except Exception as e:
-                        polling_error[0] = e
-                    finally:
-                        polling_done.set()
-
-                polling_thread = threading.Thread(target=run_polling, daemon=True)
-                polling_thread.start()
-
-                # Даём время на запуск polling
-                await asyncio.sleep(3)
-
-                # Проверяем что polling запустился
-                if polling_done.is_set():
-                    logger.error(f"Polling завершился сразу: {polling_error[0]}")
-                    await asyncio.sleep(15)
-                    continue
-
-                # Уведомление о запуске
-                for chat_id in self.active_chat_ids:
-                    try:
-                        await app.bot.send_message(
-                            chat_id=chat_id,
-                            text="🟢 БОТ ЗАПУЩЕН\nИспользуйте /start для меню"
-                        )
-                    except Exception:
-                        pass
-
-                logger.info("Telegram polling запущен")
-
-                # Ждём пока бот работает
                 while self.is_running:
-                    await asyncio.sleep(10)
-                    if polling_done.is_set():
-                        logger.warning("Polling остановился, перезапуск...")
-                        break
+                    await asyncio.sleep(5)
 
             except Exception as e:
                 logger.error(f"Ошибка Telegram бота: {e}")
+
+            finally:
+                if app is not None:
+                    try:
+                        if hasattr(app, 'updater') and app.updater.running:
+                            await app.updater.stop()
+                    except Exception:
+                        pass
+                    try:
+                        if app.running:
+                            await app.stop()
+                    except Exception:
+                        pass
+                    try:
+                        await app.shutdown()
+                    except Exception:
+                        pass
+                    app = None
 
             if self.is_running:
                 logger.info("Перезапуск Telegram бота через 15 сек...")
