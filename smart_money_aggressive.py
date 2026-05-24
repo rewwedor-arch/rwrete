@@ -123,6 +123,8 @@ class StrategyConfig:
     POSITION_TIMEOUT_HOURS: float = 1.8
     BAD_POSITION_TIMEOUT_MINUTES: int = 12
     BAD_TRADE_EXIT_MINUTES: int = 6
+    SMART_EXIT_ANALYSIS: bool = True
+    WEAK_MOMENTUM_EXIT: float = -8.0
 
 config = StrategyConfig()
 
