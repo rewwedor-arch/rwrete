@@ -103,7 +103,7 @@ class StrategyConfig:
     # Выход по откату от пика (в % ROE)
     MIN_PEAK_PNL_TO_TRACK: float = 12.0
     PEAK_DRAWDOWN_CLOSE_PCT: float = 2.5
-    
+
     # Трейлинг
     TRAILING_ACTIVATE_PCT: float = 18.0
     TRAILING_DRAWDOWN_CLOSE_PCT: float = 4.0
@@ -112,7 +112,7 @@ class StrategyConfig:
     # Экстренное закрытие плохой сделки
     MAX_POSITION_LOSS_PCT: float = -22.0
 
-    
+
     # Частичные TP (в % ROE)
     PARTIAL_TP_ENABLED = True
     PARTIAL_TP1_PCT: float = 18.0   # Фиксируем 40%
@@ -130,7 +130,6 @@ config = StrategyConfig()
 # ПРЕДОХРАНИТЕЛЬ: НОВОСТНОЙ ФОН / НАСТРОЕНИЕ РЫНКА
 # ============================================================================
 ALLOW_TRADING = True
-
 async def check_fear_greed_index(bot: 'SmartMoneyBot'):
     """Фоновая проверка Crypto Fear & Greed Index каждые 30 минут.
     При Extreme Fear (< 25) — приостановка открытия новых сделок.
@@ -182,16 +181,16 @@ async def check_fear_greed_index(bot: 'SmartMoneyBot'):
 
 class Database:
     """SQLite база данных для истории сделок и статистики"""
-    
+
     def __init__(self, db_path: str = 'smart_money.db'):
         self.db_path = db_path
         self.init_db()
-    
+
     def init_db(self):
         """Инициализация таблиц БД"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         # Таблица позиций
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS positions (
@@ -217,7 +216,7 @@ class Database:
                 adx_value REAL
             )
         ''')
-        
+
         # Таблица сигналов
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS signals (
@@ -231,7 +230,7 @@ class Database:
                 executed INTEGER DEFAULT 0
             )
         ''')
-        
+
         # Таблица статистики
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS statistics (
@@ -247,7 +246,7 @@ class Database:
                 daily_report_sent INTEGER DEFAULT 0
             )
         ''')
-        
+
         # Таблица алёртов
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS alerts (
@@ -259,7 +258,7 @@ class Database:
                 sent INTEGER DEFAULT 0
             )
         ''')
-        
+
         conn.commit()
         # Исправление старых строк: total_pnl_pct раньше суммировали по сделкам — пересчитываем от DEPOSIT из .env
         try:
@@ -274,7 +273,7 @@ class Database:
             pass
         conn.close()
         logger.info("База данных инициализирована")
-    
+
     def add_position(self, symbol: str, side: str, entry_price: float, 
                      stop_loss: float, take_profit: float, amount_usdt: float, leverage: int,
                      quantity: float, smc_score: int, bos_info: str,
@@ -282,7 +281,7 @@ class Database:
         """Добавление новой позиции"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         cursor.execute('''
             INSERT INTO positions (symbol, side, entry_price, stop_loss, take_profit,
                                    amount_usdt, leverage, quantity, smc_score, bos_info,
@@ -291,70 +290,70 @@ class Database:
         ''', (symbol, side, entry_price, stop_loss, take_profit,
               amount_usdt, leverage, quantity, smc_score, bos_info,
               1 if fvg_detected else 0, rsi_value, adx_value))
-        
+
         position_id = cursor.lastrowid
         conn.commit()
         conn.close()
         return position_id
-    
+
     def update_position(self, position_id: int, close_price: float, 
                         pnl: float, pnl_pct: float, status: str = 'CLOSED'):
         """Обновление позиции при закрытии"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         cursor.execute('''
             UPDATE positions 
             SET close_price = ?, close_timestamp = CURRENT_TIMESTAMP,
                 pnl = ?, pnl_pct = ?, status = ?
             WHERE id = ?
         ''', (close_price, pnl, pnl_pct, status, position_id))
-        
+
         conn.commit()
         conn.close()
-    
+
     def get_open_positions(self) -> List[Dict]:
         """Получение всех открытых позиций"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        
+
         cursor.execute('''
             SELECT * FROM positions WHERE status = 'OPEN'
         ''')
-        
+
         positions = [dict(row) for row in cursor.fetchall()]
         conn.close()
         return positions
-    
+
     def add_signal(self, symbol: str, signal_type: str, entry_price: float,
                    smc_score: int, indicators: dict) -> int:
         """Добавление сигнала"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         cursor.execute('''
             INSERT INTO signals (symbol, signal_type, entry_price, smc_score, indicators)
             VALUES (?, ?, ?, ?, ?)
         ''', (symbol, signal_type, entry_price, smc_score, json.dumps(indicators)))
-        
+
         signal_id = cursor.lastrowid
         conn.commit()
         conn.close()
         return signal_id
-    
+
     def mark_signal_executed(self, signal_id: int):
         """Отметка выполненного сигнала"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         cursor.execute('''
             UPDATE signals SET executed = 1 WHERE id = ?
         ''', (signal_id,))
-        
+
         conn.commit()
         conn.close()
-    
+
     def update_daily_statistics(
         self,
         pnl: float,
@@ -433,41 +432,41 @@ class Database:
 
         conn.commit()
         conn.close()
-    
+
     def get_daily_statistics(self, date: str = None) -> Optional[Dict]:
         """Получение статистики за день"""
         if not date:
             date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
-        
+
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        
+
         cursor.execute('SELECT * FROM statistics WHERE date = ?', (date,))
         row = cursor.fetchone()
         conn.close()
-        
+
         return dict(row) if row else None
-    
+
     def add_alert(self, position_id: int, alert_type: str, message: str):
         """Добавление алёрта"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         cursor.execute('''
             INSERT INTO alerts (position_id, alert_type, message)
             VALUES (?, ?, ?)
         ''', (position_id, alert_type, message))
-        
+
         conn.commit()
         conn.close()
-    
+
     def get_all_statistics(self) -> Dict:
         """Получение общей статистики"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        
+
         # Общая статистика
         cursor.execute('''
             SELECT 
@@ -481,7 +480,7 @@ class Database:
             FROM positions WHERE status = 'CLOSED'
         ''')
         row = cursor.fetchone()
-        
+
         # Статистика по дням
         cursor.execute('''
             SELECT COUNT(*) as total_days,
@@ -491,12 +490,12 @@ class Database:
             FROM statistics
         ''')
         days_row = cursor.fetchone()
-        
+
         conn.close()
-        
+
         stats = dict(row) if row else {}
         days_stats = dict(days_row) if days_row else {}
-        
+
         stats.update(days_stats)
         return stats
 
@@ -505,7 +504,7 @@ class Database:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        
+
         cursor.execute('''
             SELECT 
                 COUNT(*) as total_trades,
@@ -515,10 +514,10 @@ class Database:
             FROM positions 
             WHERE status = 'CLOSED' AND close_timestamp >= datetime('now', ?)
         ''', (f'-{hours} hours',))
-        
+
         row = cursor.fetchone()
         conn.close()
-        
+
         return dict(row) if row else {}
 
 
@@ -528,10 +527,10 @@ class Database:
 
 class SMCAnalyzer:
     """Анализ Smart Money Concepts"""
-    
+
     def __init__(self, exchange: ccxt.binanceusdm):
         self.exchange = exchange
-    
+
     async def get_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> List[List]:
         """Получение свечных данных"""
         try:
@@ -540,73 +539,73 @@ class SMCAnalyzer:
         except Exception as e:
             logger.error(f"Ошибка получения OHLCV для {symbol}: {e}")
             return []
-    
+
     def calculate_ema(self, prices: List[float], period: int) -> List[float]:
         """Расчет EMA"""
         if len(prices) < period:
             return []
-        
+
         ema = []
         multiplier = 2 / (period + 1)
-        
+
         # SMA для первого значения
         sma = sum(prices[:period]) / period
         ema.append(sma)
-        
+
         # EMA для остальных
         for i in range(period, len(prices)):
             ema_val = (prices[i] - ema[-1]) * multiplier + ema[-1]
             ema.append(ema_val)
-        
+
         return ema
-    
+
     def calculate_rsi(self, prices: List[float], period: int = 14) -> List[float]:
         """Расчет RSI"""
         if len(prices) < period + 1:
             return []
-        
+
         rsi = []
         gains = []
         losses = []
-        
+
         for i in range(1, len(prices)):
             change = prices[i] - prices[i-1]
             gains.append(max(0, change))
             losses.append(max(0, -change))
-        
+
         # Первый расчет
         avg_gain = sum(gains[:period]) / period
         avg_loss = sum(losses[:period]) / period
-        
+
         if avg_loss == 0:
             rsi.append(100)
         else:
             rs = avg_gain / avg_loss
             rsi.append(100 - (100 / (1 + rs)))
-        
+
         # Последующие расчеты
         for i in range(period, len(gains)):
             avg_gain = (avg_gain * (period - 1) + gains[i]) / period
             avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-            
+
             if avg_loss == 0:
                 rsi.append(100)
             else:
                 rs = avg_gain / avg_loss
                 rsi.append(100 - (100 / (1 + rs)))
-        
+
         return rsi
-    
+
     def calculate_adx(self, high: List[float], low: List[float], 
                       close: List[float], period: int = 14) -> List[float]:
         """Расчет ADX"""
         if len(close) < period + 1:
             return []
-        
+
         plus_dm = []
         minus_dm = []
         tr = []
-        
+
         for i in range(1, len(close)):
             # True Range
             tr_val = max(
@@ -615,155 +614,155 @@ class SMCAnalyzer:
                 abs(low[i] - close[i-1])
             )
             tr.append(tr_val)
-            
+
             # Directional Movement
             plus_dm_val = max(0, high[i] - high[i-1]) if high[i] - high[i-1] > low[i-1] - low[i] else 0
             minus_dm_val = max(0, low[i-1] - low[i]) if low[i-1] - low[i] > high[i] - high[i-1] else 0
             plus_dm.append(plus_dm_val)
             minus_dm.append(minus_dm_val)
-        
+
         # Smoothed values
         atr = sum(tr[:period]) / period
         plus_di = [(sum(plus_dm[:period]) / atr) * 100]
         minus_di = [(sum(minus_dm[:period]) / atr) * 100]
-        
+
         dx = []
         if plus_di[0] + minus_di[0] > 0:
             dx.append(abs(plus_di[0] - minus_di[0]) / (plus_di[0] + minus_di[0]) * 100)
         else:
             dx.append(0)
-        
+
         # ADX
         adx = [sum(dx[:period]) / period] if len(dx) >= period else [0]
-        
+
         for i in range(period, len(tr)):
             atr = (atr * (period - 1) + tr[i]) / period
             pdi = ((plus_di[-1] * (period - 1) + (plus_dm[i] / atr) * 100) / period) if atr > 0 else 0
             mdi = ((minus_di[-1] * (period - 1) + (minus_dm[i] / atr) * 100) / period) if atr > 0 else 0
             plus_di.append(pdi)
             minus_di.append(mdi)
-            
+
             if pdi + mdi > 0:
                 dx_val = abs(pdi - mdi) / (pdi + mdi) * 100
             else:
                 dx_val = 0
             dx.append(dx_val)
-            
+
             adx_val = (adx[-1] * (period - 1) + dx_val) / period
             adx.append(adx_val)
-        
+
         return adx
-    
+
     def calculate_macd(self, prices: List[float], fast: int = 12, 
                        slow: int = 26, signal: int = 9) -> Dict:
         """Расчет MACD"""
         if len(prices) < slow + signal:
             return {'macd': 0, 'signal': 0, 'histogram': 0}
-        
+
         ema_fast = self.calculate_ema(prices, fast)
         ema_slow = self.calculate_ema(prices, slow)
-        
+
         if len(ema_fast) < signal or len(ema_slow) < signal:
             return {'macd': 0, 'signal': 0, 'histogram': 0}
-        
+
         # Выравнивание длин
         min_len = min(len(ema_fast), len(ema_slow))
         ema_fast = ema_fast[-min_len:]
         ema_slow = ema_slow[-min_len:]
-        
+
         macd_line = [f - s for f, s in zip(ema_fast, ema_slow)]
         signal_line = self.calculate_ema(macd_line, signal)
-        
+
         if not signal_line:
             return {'macd': 0, 'signal': 0, 'histogram': 0}
-        
+
         histogram = macd_line[-1] - signal_line[-1] if len(signal_line) > 0 else 0
-        
+
         return {
             'macd': macd_line[-1] if macd_line else 0,
             'signal': signal_line[-1] if signal_line else 0,
             'histogram': histogram
         }
-    
+
     def calculate_sma(self, prices: List[float], period: int) -> List[float]:
         """Расчет SMA"""
         if len(prices) < period:
             return []
-        
+
         sma = []
         for i in range(period, len(prices) + 1):
             sma.append(sum(prices[i-period:i]) / period)
-        
+
         return sma
-    
+
     def detect_bos_choch(self, ohlcv: List[List]) -> str:
         """Обнаружение BOS (Break of Structure) и CHoCH (Change of Character)
         Поддерживает и LONG и SHORT направления.
         """
         if len(ohlcv) < 20:
             return "NONE"
-        
+
         closes = [c[4] for c in ohlcv]
         highs = [h[2] for h in ohlcv]
         lows = [l[3] for l in ohlcv]
-        
+
         previous_highs = highs[-11:-1]
         previous_lows = lows[-11:-1]
         highest = max(previous_highs)
         lowest = min(previous_lows)
-        
+
         current_price = closes[-1]
-        
+
         # BOS вверх — пробой максимума
         if current_price > highest:
             if closes[-15] > closes[-5]:
                 return "CHoCH_BULLISH"
             return "BOS_UP"
-        
+
         # BOS вниз — пробой минимума
         if current_price < lowest:
             if closes[-15] < closes[-5]:
                 return "CHoCH_BEARISH"
             return "BOS_DOWN"
-            
+
         return "NONE"
-    
+
     def detect_fvg(self, ohlcv: List[List]) -> str:
         """Обнаружение Fair Value Gap с проверкой pullback к зоне."""
         if len(ohlcv) < 3:
             return ''
-        
+
         current_price = ohlcv[-1][4]
-        
+
         for i in range(len(ohlcv) - 3):  # не берём последнюю свечу
             c1, c2, c3 = ohlcv[i], ohlcv[i + 1], ohlcv[i + 2]
             high1, low1 = c1[2], c1[3]
             high3, low3 = c3[2], c3[3]
-            
+
             # Бычий FVG: gap между high свечи 1 и low свечи 3
             if high1 < low3:
                 # Цена должна вернуться в эту зону (pullback)
                 if high1 * 0.998 <= current_price <= low3 * 1.003:
                     return 'BULLISH'
-            
+
             # Медвежий FVG
             if low1 > high3:
                 if high3 * 0.997 <= current_price <= low1 * 1.002:
                     return 'BEARISH'
         return ''
-    
+
     def detect_order_block(self, ohlcv: List[List]) -> str:
         """Обнаружение Order Block с проверкой pullback."""
         if len(ohlcv) < 10:
             return ''
-        
+
         current_price = ohlcv[-1][4]
-        
+
         # Ищем импульсное движение (последние 10 свечей)
         for i in range(len(ohlcv) - 5, max(0, len(ohlcv) - 15), -1):
             candle = ohlcv[i]
             c_open, c_high, c_low, c_close = candle[1], candle[2], candle[3], candle[4]
-            
+
             # Бычий OB: красная свеча перед импульсом вверх
             if c_open > c_close:  # красная
                 # Проверяем что после неё был рост
@@ -772,7 +771,7 @@ class SMCAnalyzer:
                     # Pullback: цена вернулась к телу этой свечи
                     if c_low * 0.998 <= current_price <= c_high * 1.003:
                         return 'BULLISH'
-            
+
             # Медвежий OB: зелёная свеча перед импульсом вниз
             if c_close > c_open:  # зелёная
                 future_closes = [ohlcv[j][4] for j in range(i+1, min(i+4, len(ohlcv)))]
@@ -785,7 +784,7 @@ class SMCAnalyzer:
     async def analyze_symbol(self, symbol: str) -> Dict[str, Any]:
         """
         АНАЛИЗ — 7 ИНДИКАТОРОВ, LONG + SHORT
-        
+
         Бот анализирует оба направления и выбирает сильнейшее:
         1. BOS/CHoCH (Смена структуры) — вверх или вниз
         2. FVG (Имбаланс) — бычий или медвежий
@@ -794,7 +793,7 @@ class SMCAnalyzer:
         5. ADX > 20 (Сила тренда) — нейтральный
         6. MACD — бычий или медвежий
         7. Объем (Всплеск > 1.3x) — нейтральный
-        
+
         Минимум 4/7 для входа.
         """
         result = {
@@ -811,26 +810,26 @@ class SMCAnalyzer:
             'ema200': 0,
             'volume_ok': False
         }
-        
+
         try:
             ohlcv_5m = await self.get_ohlcv(symbol, config.SCANNER_TIMEFRAME, limit=100)
             ohlcv_15m = await self.get_ohlcv(symbol, config.TREND_TIMEFRAME, limit=100)
-            
+
             if not ohlcv_5m or not ohlcv_15m:
                 return result
-            
+
             closes_5m = [c[4] for c in ohlcv_5m]
             highs_5m = [h[2] for h in ohlcv_5m]
             lows_5m = [l[3] for l in ohlcv_5m]
             volumes_5m = [v[5] for v in ohlcv_5m]
             current_price = closes_5m[-1]
-            
+
             # Считаем очки для LONG и SHORT отдельно
             long_score = 0
             short_score = 0
             long_ind = {}
             short_ind = {}
-            
+
             # ═══ 1. BOS/CHoCH (Структура на 15m) ═══
             bos = self.detect_bos_choch(ohlcv_15m)
             result['bos'] = bos
@@ -840,7 +839,7 @@ class SMCAnalyzer:
             if bos in ['BOS_DOWN', 'CHoCH_BEARISH']:
                 short_score += 1
                 short_ind['bos'] = True
-            
+
             # ═══ 2. FVG (Имбаланс на 5m) ═══
             fvg = self.detect_fvg(ohlcv_5m[-20:])
             result['fvg'] = bool(fvg)
@@ -850,7 +849,7 @@ class SMCAnalyzer:
             if fvg == 'BEARISH':
                 short_score += 1
                 short_ind['fvg'] = True
-            
+
             # ═══ 2b. Order Block (на 5m) ═══
             ob = self.detect_order_block(ohlcv_5m[-20:])
             if ob == 'BULLISH':
@@ -859,9 +858,9 @@ class SMCAnalyzer:
             if ob == 'BEARISH':
                 short_score += 1
                 short_ind['ob'] = True
-            
+
             has_smc_structure = bool(fvg) or bool(ob)
-            
+
             # ═══ 3. EMA 50 Тренд ═══
             ema50 = self.calculate_ema(closes_5m, 50)
             if ema50:
@@ -872,7 +871,7 @@ class SMCAnalyzer:
                 else:
                     short_score += 1
                     short_ind['ema50_trend'] = True
-            
+
             # ═══ 4. RSI ═══
             rsi = self.calculate_rsi(closes_5m, 14)
             if rsi and len(rsi) >= 2:
@@ -885,7 +884,7 @@ class SMCAnalyzer:
                 if 20 <= rsi[-1] <= 60 and rsi[-1] < rsi[-2]:
                     short_score += 1
                     short_ind['rsi_momentum'] = True
-            
+
             # ═══ 5. ADX > 20 (Сила тренда — нейтральный) ═══
             adx = self.calculate_adx(highs_5m, lows_5m, closes_5m, 14)
             if adx:
@@ -895,7 +894,7 @@ class SMCAnalyzer:
                     short_score += 1
                     long_ind['adx'] = True
                     short_ind['adx'] = True
-            
+
             # ═══ 6. MACD ═══
             macd = self.calculate_macd(closes_5m)
             result['macd'] = macd
@@ -905,7 +904,7 @@ class SMCAnalyzer:
             if macd['histogram'] < 0 and macd['macd'] < macd['signal']:
                 short_score += 1
                 short_ind['macd'] = True
-            
+
             # ═══ 7. Всплеск объема (нейтральный) ═══
             vol_sma = self.calculate_sma(volumes_5m, 20)
             if vol_sma and vol_sma[-1] > 0:
@@ -916,7 +915,7 @@ class SMCAnalyzer:
                     result['volume_ok'] = True
                     long_ind['volume_spike'] = True
                     short_ind['volume_spike'] = True
-            
+
             # ═══ Выбираем лучшее направление ═══
             # СИГНАЛ ВАЛИДЕН ТОЛЬКО ЕСЛИ ЕСТЬ SMC СТРУКТУРА (FVG или OB)
             if long_score >= short_score and long_score >= config.MIN_INDICATORS_SCORE and has_smc_structure:
@@ -939,10 +938,10 @@ class SMCAnalyzer:
                     result['score'] = short_score
                     result['direction'] = 'SHORT'
                     result['indicators'] = short_ind
-            
+
         except Exception as e:
             logger.error(f"Ошибка анализа {symbol}: {e}")
-        
+
         return result
 
 
@@ -979,7 +978,7 @@ class Position:
 
 class SmartMoneyBot:
     """Основной класс торгового бота"""
-    
+
     def __init__(self, api_key: str, api_secret: str, telegram_token: str, 
                  telegram_chat_id: str, user_chat_id: str = None, testnet: bool = False):
         self.api_key = api_key
@@ -988,7 +987,7 @@ class SmartMoneyBot:
         self.telegram_chat_id = telegram_chat_id
         self.user_chat_id = user_chat_id
         self.testnet = testnet
-        
+
         exchange_config = {
             'apiKey': api_key,
             'secret': api_secret,
@@ -999,12 +998,12 @@ class SmartMoneyBot:
                 'adjustForTimeDifference': True
             }
         }
-        
+
         if testnet:
             logger.info("🔧 Используется Binance Demo Trading (demo-fapi.binance.com)")
-        
+
         self.exchange = ccxt.binanceusdm(exchange_config)
-        
+
         if testnet:
             # Обновляем URL на demo endpoints после инициализации (чтобы обойти ошибку ccxt)
             demo_urls = {
@@ -1018,16 +1017,16 @@ class SmartMoneyBot:
             self.exchange.urls['api'].update(demo_urls)
 
         self.exchange.has['fetchCurrencies'] = False
-        
+
         # База данных
         self.db = Database()
-        
+
         # SMC Анализатор
         self.smc_analyzer = SMCAnalyzer(self.exchange)
-        
+
         # Активные позиции
         self.positions: Dict[int, Position] = {}
-        
+
         # Список символов для сканирования
         self.symbols_to_scan = [
             'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT',
@@ -1043,19 +1042,19 @@ class SmartMoneyBot:
             'RUNE/USDT', 'KAS/USDT', 'TON/USDT', 'IMX/USDT', 'MNT/USDT', 
             'QNT/USDT', 'FLOKI/USDT', 'BOME/USDT', 'MEME/USDT', 'ALT/USDT'
         ]
-        
+
         # Статус бота
         self.is_running = False
         self.last_scan_time = None
         self.signals_today = 0
         self.max_signals_per_day = 9999  # Без лимита — агрессивный режим
-        
+
         # Telegram bot application
         self.app = None
         self.active_chat_ids = set([str(self.telegram_chat_id)])
         if self.user_chat_id:
             self.active_chat_ids.add(str(self.user_chat_id))
-        
+
         # Отдельный Bot для отправки сообщений (работает независимо от polling)
         self._bot = Bot(token=self.telegram_token)
 
@@ -1080,7 +1079,7 @@ class SmartMoneyBot:
         try:
             await self.exchange.load_markets()
             logger.info("Markets loaded successfully - API ключ валиден")
-            
+
             try:
                 balance = await self.exchange.fetch_balance()
                 logger.info(f"Подключено к Binance Futures. Баланс: {balance.get('total', {})}")
@@ -1158,7 +1157,7 @@ class SmartMoneyBot:
             return 0, 0, 0
 
 
-    
+
     async def open_position(self, symbol: str, entry_price: float,
                             smc_result: Dict) -> Optional[Position]:
         """Открытие позиции (LONG или SHORT)"""
@@ -1168,10 +1167,10 @@ class SmartMoneyBot:
             return None
         try:
             direction = smc_result.get('direction', 'LONG')
-            
+
             market_info = self.exchange.market(symbol)
             min_notional = float(market_info.get('limits', {}).get('cost', {}).get('min', 5))
-            
+
             # Расчет параметров (score определяет вес позиции)
             quantity, margin, actual_amount = await self.calculate_position_size(
                 entry_price, score=smc_result['score']
@@ -1179,10 +1178,10 @@ class SmartMoneyBot:
             if quantity == 0:
                 logger.warning(f"Недостаточно средств для открытия позиции {symbol}")
                 return None
-            
+
             # Округление количества
             quantity = float(self.exchange.amount_to_precision(symbol, quantity))
-            
+
             # Проверка минимального номинала (notional = quantity * price)
             notional = quantity * entry_price
             if notional < min_notional:
@@ -1192,10 +1191,10 @@ class SmartMoneyBot:
                 if notional < min_notional:
                     logger.warning(f"Не удалось подобрать qty для {symbol}, пропускаем")
                     return None
-            
+
             dir_emoji = '🟢 LONG' if direction == 'LONG' else '🔴 SHORT'
             logger.info(f"Открытие {dir_emoji} {symbol}: qty={quantity}, notional=${notional:.2f}")
-            
+
             # 1. Кросс маржа и плечо
             try:
                 await self.exchange.set_margin_mode('cross', symbol)
@@ -1215,7 +1214,7 @@ class SmartMoneyBot:
                         break
                     except Exception:
                         continue
-            
+
             # 2. Открытие позиции
             try:
                 if direction == 'SHORT':
@@ -1240,10 +1239,10 @@ class SmartMoneyBot:
                         raise e2
                 else:
                     raise e
-            
+
             actual_entry = float(order['average']) if order.get('average') else entry_price
             actual_qty = float(order['filled']) if order.get('filled') else quantity
-            
+
             # SL/TP зависят от направления
             if direction == 'SHORT':
                 actual_sl = float(self.exchange.price_to_precision(symbol, actual_entry * (1 + config.STOP_LOSS_PCT / 100)))
@@ -1253,7 +1252,7 @@ class SmartMoneyBot:
                 actual_sl = float(self.exchange.price_to_precision(symbol, actual_entry * (1 - config.STOP_LOSS_PCT / 100)))
                 actual_tp = float(self.exchange.price_to_precision(symbol, actual_entry * (1 + config.TP3_PCT / 100)))
                 close_side = 'SELL'
-            
+
             # 3. SL
             try:
                 await self.exchange.create_order(
@@ -1263,7 +1262,7 @@ class SmartMoneyBot:
                 )
             except Exception as e:
                 logger.warning(f"⚠️ SL не выставлен для {symbol}: {e}")
-            
+
             # 4. TP
             try:
                 await self.exchange.create_order(
@@ -1273,7 +1272,7 @@ class SmartMoneyBot:
                 )
             except Exception as e:
                 logger.warning(f"⚠️ TP не выставлен для {symbol}: {e}")
-            
+
             if direction == 'SHORT':
                 tp1_price = float(self.exchange.price_to_precision(symbol, actual_entry * (1 - config.TAKE_PROFIT_PCT / 100)))
             else:
@@ -1294,7 +1293,7 @@ class SmartMoneyBot:
                 rsi_value=smc_result['rsi'],
                 adx_value=smc_result['adx']
             )
-            
+
             position = Position(
                 id=position_id,
                 symbol=symbol,
@@ -1308,9 +1307,9 @@ class SmartMoneyBot:
                 timestamp=datetime.now(timezone.utc),
                 realized_pnl_usd=0.0,
             )
-            
+
             self.positions[position_id] = position
-            
+
             score = smc_result['score']
             quality = "★★★ СИЛЬНЫЙ" if score >= 6 else ("★★☆ ХОРОШИЙ" if score >= 5 else "★☆☆ СРЕДНИЙ")
             rr = config.TP3_PCT / config.STOP_LOSS_PCT if config.STOP_LOSS_PCT > 0 else 0
@@ -1330,9 +1329,9 @@ class SmartMoneyBot:
                 f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
                 f"SMART MONEY 1 BOT"
             )
-            
+
             await self.send_telegram_message(message)
-            
+
             signal_id = self.db.add_signal(
                 symbol=symbol,
                 signal_type=direction,
@@ -1342,29 +1341,29 @@ class SmartMoneyBot:
             )
             self.db.mark_signal_executed(signal_id)
             self.signals_today += 1
-            
+
             logger.info(f"Позиция открыта: {direction} {symbol} @ {actual_entry}")
             return position
-            
+
         except Exception as e:
             logger.error(f"Ошибка открытия позиции {symbol}: {e}")
             await self.send_telegram_message(f"❌ Ошибка открытия {symbol}: {e}")
             return None
-    
+
     async def close_position(self, position_id: int, emergency: bool = False) -> bool:
         """Закрытие позиции"""
         try:
             if position_id not in self.positions:
                 logger.warning(f"Позиция {position_id} не найдена")
                 return False
-            
+
             position = self.positions[position_id]
             symbol = position.symbol
             qty_close = position.remaining_quantity if position.remaining_quantity > 0 else position.quantity
             if qty_close <= 0:
                 logger.warning(f"Нечего закрывать по позиции {position_id}")
                 return False
-            
+
             # Закрытие: для LONG продаём, для SHORT покупаем
             try:
                 if position.side == 'SHORT':
@@ -1402,13 +1401,13 @@ class SmartMoneyBot:
                         )
                 else:
                     raise
-            
+
             # Очистка оставшихся ордеров (SL/TP)
             try:
                 await self.exchange.cancel_all_orders(symbol)
             except Exception as cancel_e:
                 logger.warning(f"Не удалось отменить ордера для {symbol}: {cancel_e}")
-            
+
             exit_price = order.get('average')
             if not exit_price:
                 exit_price = order.get('price')
@@ -1418,7 +1417,7 @@ class SmartMoneyBot:
                     exit_price = ticker['last']
                 except:
                     exit_price = position.entry_price  # Fallback to avoid huge fake PnL
-            
+
             exit_price = float(exit_price)
             # PnL зависит от направления
             if position.side == 'SHORT':
@@ -1429,23 +1428,23 @@ class SmartMoneyBot:
             # amount_usdt УЖЕ является маржой (не номиналом!), не делим повторно
             margin = position.amount_usdt
             pnl_pct = (total_pnl / margin) * 100 if margin > 0 else 0.0
-            
+
             # Обновление БД
             self.db.update_position(position_id, exit_price, total_pnl, pnl_pct)
             self.db.update_daily_statistics(total_pnl, pnl_pct, count_as_trade=True, equity_reference=config.DEPOSIT)
-            
+
             # Удаление из активных
             del self.positions[position_id]
-            
+
             # Длительность позиции
             duration = datetime.now(timezone.utc) - position.timestamp
-            
+
             # Сообщение в Telegram — подробный отчёт о закрытой сделке
             emoji = "✅" if total_pnl >= 0 else "❌"
             result_text = "ПРИБЫЛЬ" if total_pnl >= 0 else "УБЫТОК"
             hours = int(duration.total_seconds() // 3600)
             minutes = int((duration.total_seconds() % 3600) // 60)
-            
+
             message = (
                 f"{emoji} ПОЗИЦИЯ ЗАКРЫТА | {result_text}\n"
                 f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
@@ -1460,20 +1459,20 @@ class SmartMoneyBot:
                 f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
                 f"SMART MONEY 1 BOT"
             )
-            
+
             if emergency:
                 message = f"🚨 ЭКСТРЕННОЕ ЗАКРЫТИЕ\n{message}"
-            
+
             await self.send_telegram_message(message)
-            
+
             logger.info(f"Позиция закрыта: {position.symbol}, PnL: ${total_pnl:.2f}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Ошибка закрытия позиции {position_id}: {e}")
             await self.send_telegram_message(f"❌ Ошибка закрытия: {e}")
             return False
-    
+
     async def close_all_positions(self, emergency: bool = False):
         """Закрытие всех позиций"""
         position_ids = list(self.positions.keys())
@@ -1534,7 +1533,7 @@ class SmartMoneyBot:
         except Exception as e:
             logger.error(f"Ошибка переноса SL {position.symbol}: {e}")
 
-    
+
     def calculate_position_roe(self, position, current_price):
         """Единый корректный расчет ROE для LONG/SHORT"""
         if position.side == 'SHORT':
@@ -1550,14 +1549,14 @@ class SmartMoneyBot:
 
         return price_change_pct * position.leverage
 
-async def monitor_positions(self):
+    async def monitor_positions(self):
         """Мониторинг позиций — Трейлинг, Частичные TP и Динамический SL"""
         for position_id, position in list(self.positions.items()):
             try:
                 # 1. Получение текущей цены
                 ticker = await self.exchange.fetch_ticker(position.symbol)
                 current_price = ticker['last']
-                
+
                 # 2. Корректный расчет ROE
                 pnl_pct = self.calculate_position_roe(
                     position,
@@ -1578,13 +1577,13 @@ async def monitor_positions(self):
                     pnl_usd = position.realized_pnl_usd + (position.entry_price - current_price) * position.remaining_quantity
                 else:
                     pnl_usd = position.realized_pnl_usd + (current_price - position.entry_price) * position.remaining_quantity
-                
+
                 # 3. Обновление пика (peak_pnl)
                 if isinstance(pnl_pct, (int, float)) and pnl_pct > position.peak_pnl:
                     position.peak_pnl = pnl_pct
-                
+
                 pair = position.symbol.replace('/USDT', '')
-                
+
                 # 3.5 Программный STOP LOSS (сравниваем price_change_pct с config.STOP_LOSS_PCT, т.к. стоп задан в % цены, а не ROE)
                 if price_change_pct <= -config.STOP_LOSS_PCT:
                     message = (
@@ -1596,7 +1595,7 @@ async def monitor_positions(self):
                     await self.send_telegram_message(message)
                     await self.close_position(position_id)
                     continue
-                
+
                 # 4. АНАЛИЗ ТРЕНДА ДЛЯ УБЫТОЧНЫХ ПОЗИЦИЙ
                 # Если позиция в убытке более 1.5% и тренд против нас — закрываем раньше SL
                 if price_change_pct <= -1.5 and position.peak_pnl < 5.0:
@@ -1611,7 +1610,7 @@ async def monitor_positions(self):
                             # EMA анализ
                             ema20 = self.smc_analyzer.calculate_ema(closes, 20)
                             below_ema = ema20 and current_price < ema20[-1]
-                            
+
                             if downtrend and below_ema:
                                 message = (
                                     f"🔴 АНАЛИЗ ТРЕНДА | {pair}\n"
@@ -1647,17 +1646,17 @@ async def monitor_positions(self):
                         await self.send_telegram_message(message)
                         await self.close_position(position_id)
                         continue
-                
+
                 # 6. TRAILING STOP
                 if pnl_pct >= config.TRAILING_ACTIVATE_PCT and not position.trailing_active:
                     position.trailing_active = True
                     position.trailing_peak = pnl_pct
                     logger.info(f"Трейлинг активирован для {position.symbol} на {pnl_pct:.1f}%")
-                
+
                 if position.trailing_active:
                     if pnl_pct > position.trailing_peak:
                         position.trailing_peak = pnl_pct
-                    
+
                     trailing_drawdown = position.trailing_peak - pnl_pct
                     if trailing_drawdown >= config.TRAILING_DRAWDOWN_CLOSE_PCT:
                         message = (
@@ -1715,15 +1714,15 @@ async def monitor_positions(self):
             except Exception as e:
                 logger.error(f"Ошибка мониторинга {position_id}: {e}")
 
-    
+
     async def check_position_timeout(self, position: Position):
         """Проверка времени позиции"""
         now = datetime.now(timezone.utc)
         duration = now - position.timestamp
         duration_minutes = duration.total_seconds() / 60
-        
+
         # Для убыточных позиций — закрываем через 30 минут если нет признаков разворота
-        
+
         # Общий таймаут для всех позиций
         if duration >= timedelta(hours=config.POSITION_TIMEOUT_HOURS):
             logger.info(f"Закрытие позиции {position.symbol} по таймауту ({config.POSITION_TIMEOUT_HOURS}ч)")
@@ -1731,45 +1730,45 @@ async def monitor_positions(self):
                 f"⏱ Истекло {config.POSITION_TIMEOUT_HOURS} ч для {position.symbol}. Автоматическое закрытие по правилам бота."
             )
             await self.close_position(position.id)
-    
+
     async def scan_market(self):
         """Сканирование рынка на наличие сигналов"""
         # Проверка: бот включён?
         if not self.is_running:
             return
-        
+
         if self.signals_today >= self.max_signals_per_day:
             logger.info(f"Лимит сигналов на сегодня исчерпан: {self.signals_today}")
             return
-        
+
         logger.info(f"Начало сканирования рынка... ({len(self.symbols_to_scan)} символов)")
-        
+
         for symbol in self.symbols_to_scan:
             # Проверка лимита
             if self.signals_today >= self.max_signals_per_day:
                 break
-            
+
             # Пропуск если уже есть позиция по этому символу
             if any(p.symbol == symbol for p in self.positions.values()):
                 continue
-            
+
             # Анализ
             try:
                 smc_result = await self.smc_analyzer.analyze_symbol(symbol)
             except Exception as e:
                 logger.debug(f"Пропуск {symbol}: {e}")
                 continue
-            
+
             # Проверяем, чтобы score был >= MIN_INDICATORS_SCORE (от 5/7)
             if smc_result['signal'] and smc_result['score'] >= config.MIN_INDICATORS_SCORE:
                 logger.info(f"СИГНАЛ найден: {symbol} (score: {smc_result['score']}/{config.TOTAL_INDICATORS})")
-                
+
                 # Фильтр Funding Rate (защита от толпы)
                 try:
                     funding_info = await self.exchange.fetch_funding_rate(symbol)
                     funding_rate = float(funding_info.get('fundingRate', 0))
                     direction = smc_result.get('direction', 'LONG')
-                    
+
                     if direction == 'LONG' and funding_rate > 0.0005:
                         logger.info(f"Пропуск LONG {symbol}: толпа в лонгах (funding={funding_rate:.4%})")
                         continue
@@ -1778,20 +1777,20 @@ async def monitor_positions(self):
                         continue
                 except Exception:
                     pass  # если API не поддерживает — пропускаем фильтр
-                
+
                 # Получение текущей цены для входа
                 ticker = await self.exchange.fetch_ticker(symbol)
                 entry_price = ticker['last']
-                
+
                 # Открытие позиции
                 await self.open_position(symbol, entry_price, smc_result)
-                
+
                 # Пауза между сделками
                 await asyncio.sleep(5)
-        
+
         self.last_scan_time = datetime.now(timezone.utc)
         logger.info("Сканирование завершено")
-    
+
     async def run_scanner_loop(self):
         """Цикл сканирования рынка"""
         while self.is_running:
@@ -1802,7 +1801,7 @@ async def monitor_positions(self):
             except Exception as e:
                 logger.error(f"Ошибка в цикле сканирования: {e}")
                 await asyncio.sleep(30)
-    
+
     async def run_monitoring_loop(self):
         """Цикл мониторинга позиций"""
         while self.is_running:
@@ -1813,28 +1812,28 @@ async def monitor_positions(self):
             except Exception as e:
                 logger.error(f"Ошибка в цикле мониторинга: {e}")
                 await asyncio.sleep(2)
-    
+
     async def send_daily_report(self):
         """Отправка ежедневного отчета"""
         try:
             stats = self.db.get_daily_statistics()
-            
+
             if not stats:
                 return
-            
+
             # Общая статистика
             all_stats = self.db.get_all_statistics()
-            
+
             # Расчет среднего % в день
             avg_daily = all_stats.get('avg_daily_pct', 0) or 0
-            
+
             # Начальный депозит и текущий баланс
             deposit = config.DEPOSIT
             total_pnl = all_stats.get('total_pnl', 0) or 0
             current_balance = deposit + total_pnl
             pnl_sign = '+' if total_pnl >= 0 else ''
             pnl_pct_total = (total_pnl / deposit * 100) if deposit > 0 else 0
-            
+
             message = (
                 f"📊 ДНЕВНОЙ ОТЧЕТ\n"
                 f"Дата: {datetime.now(timezone.utc).strftime('%d.%m.%Y')}\n"
@@ -1856,12 +1855,12 @@ async def monitor_positions(self):
                 f"  Худшая сделка: ${all_stats.get('worst_trade', 0):.2f}\n"
                 f"  Средний % в день: {'+' if avg_daily >= 0 else ''}{avg_daily:.1f}%"
             )
-            
+
             await self.send_telegram_message(message)
-            
+
         except Exception as e:
             logger.error(f"Ошибка отправки отчета: {e}")
-    
+
     async def run_daily_report_loop(self):
         """Цикл отправки ежедневных отчетов (в 00:00 UTC)"""
         while self.is_running:
@@ -1871,16 +1870,16 @@ async def monitor_positions(self):
                     hour=0, minute=0, second=0, microsecond=0
                 )
                 sleep_seconds = (next_midnight - now).total_seconds()
-                
+
                 await asyncio.sleep(sleep_seconds)
-                
+
                 if self.is_running:
                     await self.send_daily_report()
-                    
+
             except Exception as e:
                 logger.error(f"Ошибка в цикле отчетов: {e}")
                 await asyncio.sleep(3600)
-    
+
     async def send_hourly_report(self):
         """Отправка часового отчёта в Telegram — результат за ДЕНЬ"""
         try:
@@ -1890,11 +1889,11 @@ async def monitor_positions(self):
             today_wins = stats.get('profitable_trades', 0) if stats else 0
             today_losses = stats.get('losing_trades', 0) if stats else 0
             today_closed_pnl = stats.get('total_pnl', 0) if stats else 0
-            
+
             # Информация об открытых позициях + их текущий PnL
             positions_info = ""
             total_open_pnl = 0
-            
+
             for pid, pos in self.positions.items():
                 try:
                     ticker = await self.exchange.fetch_ticker(pos.symbol)
@@ -1907,7 +1906,7 @@ async def monitor_positions(self):
                         pnl = pos.realized_pnl_usd + (current_price - pos.entry_price) * rem
                         pnl_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100 * pos.leverage
                     total_open_pnl += pnl
-                    
+
                     emoji = "🟢" if pnl >= 0 else "🔴"
                     positions_info += (
                         f"  {emoji} {pos.symbol.replace('/USDT', '')}: "
@@ -1916,20 +1915,20 @@ async def monitor_positions(self):
                     )
                 except:
                     positions_info += f"  ⚪ {pos.symbol}: данные недоступны\n"
-            
+
             if not positions_info:
                 positions_info = "  Нет открытых позиций\n"
-            
+
             # Итого за день = закрытые + незакрытые; % от DEPOSIT (.env), не захардкоженный 140
             total_day_pnl = today_closed_pnl + total_open_pnl
             dep = config.DEPOSIT if config.DEPOSIT > 0 else 140.0
             total_day_pnl_pct = (total_day_pnl / dep) * 100
-            
+
             now_moscow = datetime.now(timezone.utc) + timedelta(hours=3)
             pnl_emoji = "📈" if total_day_pnl >= 0 else "📉"
-            
+
             winrate = (today_wins / today_trades * 100) if today_trades > 0 else 0
-            
+
             message = (
                 f"⏰ ЧАСОВОЙ ОТЧЁТ | {now_moscow.strftime('%H:%M МСК')}\n"
                 f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n\n"
@@ -1949,22 +1948,22 @@ async def monitor_positions(self):
                 f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
                 f"SMART MONEY 1 BOT"
             )
-            
+
             await self.send_telegram_message(message)
             logger.info("Часовой отчёт отправлен в Telegram")
-            
+
         except Exception as e:
             logger.error(f"Ошибка отправки часового отчёта: {e}")
-    
+
     async def run_hourly_report_loop(self):
         """Цикл отправки часовых отчётов отключен (теперь по кнопке) — просто спим бесконечно"""
         while self.is_running:
             await asyncio.sleep(3600)
-    
+
     # ========================================================================
     # TELEGRAM КОМАНДЫ И КНОПКИ
     # ========================================================================
-    
+
     def get_main_keyboard(self):
         """Создает клавиатуру с кнопками для управления"""
         from telegram import ReplyKeyboardMarkup
@@ -1978,7 +1977,7 @@ async def monitor_positions(self):
         """Обработчик нажатий на кнопки (и любого текста)"""
         if update.effective_chat:
             self.active_chat_ids.add(str(update.effective_chat.id))
-            
+
         text = update.message.text
         if text == '📊 Результаты':
             from telegram import ReplyKeyboardMarkup
@@ -2006,20 +2005,20 @@ async def monitor_positions(self):
             await self.cmd_start_bot(update, context)
         elif text == '🔴 Стоп':
             await self.cmd_stop_bot(update, context)
-            
+
     async def send_custom_report(self, update: Update, hours: int, label: str):
         """Отправка кастомного отчета за N часов"""
         stats = self.db.get_statistics_by_hours(hours)
-        
+
         trades = stats.get('total_trades') or 0
         wins = stats.get('profitable_trades') or 0
         losses = stats.get('losing_trades') or 0
         pnl = stats.get('total_pnl') or 0.0
-        
+
         dep = config.DEPOSIT if config.DEPOSIT > 0 else 140.0
         pnl_pct = (pnl / dep) * 100
         winrate = (wins / trades * 100) if trades > 0 else 0
-        
+
         total_open_pnl = 0
         open_count = len(self.positions)
         for pos in self.positions.values():
@@ -2034,12 +2033,12 @@ async def monitor_positions(self):
                 total_open_pnl += pos_pnl
             except:
                 pass
-                
+
         total_pnl = pnl + total_open_pnl
         total_pnl_pct = (total_pnl / dep) * 100
-        
+
         pnl_emoji = "📈" if total_pnl >= 0 else "📉"
-        
+
         message = (
             f"📊 ОТЧЁТ {label.upper()}\n"
             f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
@@ -2053,13 +2052,13 @@ async def monitor_positions(self):
             f"  Текущий PnL: {'+' if total_open_pnl >= 0 else ''}${total_open_pnl:.2f}\n"
         )
         await update.message.reply_text(message)
-            
+
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /start"""
         logger.info(f"Получена команда /start от {update.effective_chat.id}")
         if update.effective_chat:
             self.active_chat_ids.add(str(update.effective_chat.id))
-            
+
         message = (
             f"🤖 Smart Money Aggressive Bot\n\n"
             f"Статус: {'🟢 РАБОТАЕТ' if self.is_running else '🔴 ОСТАНОВЛЕН'}\n"
@@ -2078,7 +2077,7 @@ async def monitor_positions(self):
             logger.info(f"Ответ на /start отправлен с кнопками")
         except Exception as e:
             logger.error(f"Ошибка отправки кнопок: {e}")
-    
+
     async def cmd_balance(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /balance"""
         try:
@@ -2086,7 +2085,7 @@ async def monitor_positions(self):
             usdt_balance = balance.get('USDT', {}).get('total', 0)
             free = balance.get('USDT', {}).get('free', 0)
             used = balance.get('USDT', {}).get('used', 0)
-            
+
             message = (
                 f"💰 БАЛАНС\n\n"
                 f"USDT Total: ${usdt_balance:.2f}\n"
@@ -2098,13 +2097,13 @@ async def monitor_positions(self):
             await update.message.reply_text(message)
         except Exception as e:
             await update.message.reply_text(f"Ошибка получения баланса: {e}")
-    
+
     async def cmd_positions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /positions"""
         if not self.positions:
             await update.message.reply_text("Нет открытых позиций")
             return
-        
+
         messages = []
         for pid, pos in self.positions.items():
             try:
@@ -2117,7 +2116,7 @@ async def monitor_positions(self):
                 else:
                     pnl = pos.realized_pnl_usd + (current_price - pos.entry_price) * rem
                     pnl_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100 * pos.leverage
-                
+
                 msg = (
                     f"📍 {'🔴' if pos.side == 'SHORT' else '🟢'} #{pos.symbol.replace('/USDT', '')}\n"
                     f"Вход: {pos.entry_price}\n"
@@ -2129,9 +2128,9 @@ async def monitor_positions(self):
                 messages.append(msg)
             except Exception as e:
                 messages.append(f"Ошибка получения данных для {pos.symbol}")
-        
+
         await update.message.reply_text("\n\n".join(messages))
-    
+
     async def cmd_signals(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /signals"""
         # Упрощенная реализация - последние 10 сигналов
@@ -2139,43 +2138,43 @@ async def monitor_positions(self):
         message += f"Сегодня: {self.signals_today}/{self.max_signals_per_day}\n"
         message += f"Последнее сканирование: {self.last_scan_time or 'Не было'}"
         await update.message.reply_text(message)
-    
+
     async def cmd_close(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /close {PAIR}"""
         if not context.args:
             await update.message.reply_text("Использование: /close {PAIR}\nПример: /close BTC")
             return
-        
+
         pair = context.args[0].upper()
         symbol = f"{pair}/USDT"
-        
+
         # Поиск позиции
         found = None
         for pid, pos in self.positions.items():
             if pos.symbol.startswith(f"{pair}/"):
                 found = pid
                 break
-        
+
         if not found:
             await update.message.reply_text(f"Позиция по {pair} не найдена")
             return
-        
+
         await self.close_position(found)
-    
+
     async def cmd_close_all(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /close_all"""
         if not self.positions:
             await update.message.reply_text("Нет открытых позиций")
             return
-        
+
         await update.message.reply_text(f"Закрываю {len(self.positions)} позиций...")
         await self.close_all_positions()
-    
+
     async def cmd_emergency(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /emergency"""
         await update.message.reply_text("🚨 ЭКСТРЕННОЕ ЗАКРЫТИЕ ВСЕХ ПОЗИЦИЙ!")
         await self.close_all_positions(emergency=True)
-    
+
     async def cmd_daily_report(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /daily_report"""
         await self.send_daily_report()
@@ -2326,7 +2325,7 @@ async def monitor_positions(self):
             "Сканирование и торговля возобновлены."
         )
         await self.send_telegram_message("🟢 Бот включён оператором. Торговля возобновлена.")
-    
+
     async def cmd_stop_bot(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /stop_bot — выключить бота (без закрытия позиций)"""
         if not self.is_running:
@@ -2343,7 +2342,7 @@ async def monitor_positions(self):
 
     async def run_telegram_bot(self):
         """Запуск Telegram бота с авто-перезапуском"""
-        
+
         app = None
 
         while self.is_running:
@@ -2432,7 +2431,7 @@ async def monitor_positions(self):
     async def start(self) -> bool:
         """Запуск бота. Возвращает False, если биржа недоступна (процесс можно завершить с кодом ≠ 0)."""
         logger.info("Запуск Smart Money Aggressive Bot...")
-        
+
         # Подключение к бирже
         if not await self.connect():
             logger.error("Не удалось подключиться к бирже")
@@ -2441,12 +2440,12 @@ async def monitor_positions(self):
             except Exception:
                 pass
             return False
-        
+
         self.is_running = True
-        
+
         # Уведомление о запуске (будет отправлено после инициализации Telegram)
         telegram_started = False
-        
+
         # Запуск задач с логированием
         async def task_with_log(name, coro):
             try:
@@ -2484,13 +2483,13 @@ async def monitor_positions(self):
             asyncio.create_task(task_with_log("telegram", self.run_telegram_bot())),
             asyncio.create_task(task_with_log("fear_greed", check_fear_greed_index(self))),
         ]
-        
+
         # Ждём завершения всех задач (gather завершится только если все упадут)
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         # Если дошли сюда — все задачи завершились, что-то пошло не так
         logger.error(f"All tasks finished! Results: {results}")
-        
+
         # Ждём перед возможным перезапуском из main.py
         await asyncio.sleep(60)
         return True
@@ -2505,7 +2504,6 @@ async def monitor_positions(self):
 # ============================================================================
 # ЗАПУСК
 # ============================================================================
-
 def _env_secret(*names: str) -> str:
     """Читает первую непустую переменную окружения, убирает пробелы и BOM (частая причина -2015)."""
     for n in names:
@@ -2516,8 +2514,6 @@ def _env_secret(*names: str) -> str:
         if s:
             return s
     return ''
-
-
 async def main():
     """Точка входа"""
     from dotenv import load_dotenv
@@ -2530,7 +2526,7 @@ async def main():
     TELEGRAM_TOKEN = _env_secret('TELEGRAM_BOT_TOKEN')
     TELEGRAM_CHAT_ID = _env_secret('TELEGRAM_CHAT_ID')
     USER_CHAT_ID = _env_secret('USER_CHAT_ID')
-    
+
     # Загрузка параметров стратегии из .env
     config.DEPOSIT = float(os.getenv('DEPOSIT', config.DEPOSIT))
     config.ENTRY_AMOUNT = float(os.getenv('ENTRY_AMOUNT', config.ENTRY_AMOUNT))
@@ -2539,12 +2535,12 @@ async def main():
     config.REINVEST_PROFITS = os.getenv('REINVEST_PROFITS', 'True').lower() == 'true'
     config.DRAWDOWN_ALERT = float(os.getenv('DRAWDOWN_ALERT', '12.0'))
     use_testnet = os.getenv('BINANCE_TESTNET', 'False').lower() == 'true'
-    
+
     # Проверка наличия ключей
     if not all([API_KEY, API_SECRET, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
         logger.warning("⚠️ Не настроены переменные окружения! Бот будет работать только с aiohttp сервером.")
         logger.warning("   Установите: BINANCE_API_KEY, BINANCE_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID")
-    
+
     # Создание и запуск бота
     bot = SmartMoneyBot(
         api_key=API_KEY,
@@ -2554,7 +2550,7 @@ async def main():
         user_chat_id=USER_CHAT_ID,
         testnet=use_testnet
     )
-    
+
     try:
         started = await bot.start()
         if started is False:
