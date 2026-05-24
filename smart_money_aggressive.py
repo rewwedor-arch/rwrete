@@ -58,18 +58,18 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class StrategyConfig:
-    """Конфигурация стратегии SMART MONEY — ТУРБО РЕЖИМ (Пампы)"""
+    """Конфигурация стратегии SMART MONEY — FAST COMPOUND MODE"""
     # Финансовые параметры
     DEPOSIT: float = 50.0  # Стартовый депозит USDT
     ENTRY_AMOUNT: float = 50.0  # Базовая сумма (используется если REINVEST=False)
-    LEVERAGE: int = 45  # Максимальное плечо (x45)
+    LEVERAGE: int = 50  # Максимальное плечо (x45)
 
     # Риск-менеджмент — ШИРОКИЙ КОРИДОР для высоковолатильных альтов
-    STOP_LOSS_PCT: float = 1.2  # SL -1.2% от цены (-54% ROE)
-    TAKE_PROFIT_PCT: float = 1.0  
+    STOP_LOSS_PCT: float = 0.8  # SL -1.2% от цены (-54% ROE)
+    TAKE_PROFIT_PCT: float = 0.45  
     TAKE_PROFIT: float = TAKE_PROFIT_PCT  
-    TP2_PCT: float = 1.8  
-    TP3_PCT: float = 3.6  
+    TP2_PCT: float = 0.9  
+    TP3_PCT: float = 1.8  
 
     # Цели
     DAILY_TARGET_MIN: float = 10.0  # Минимальная цель в день %
@@ -101,23 +101,23 @@ class StrategyConfig:
     MIN_SLOT_USDT: float = 5.0     # Минимальный капитал на 1 сделку ($)
 
     # Выход по откату от пика (в % ROE)
-    MIN_PEAK_PNL_TO_TRACK: float = 25.0
-    PEAK_DRAWDOWN_CLOSE_PCT: float = 8.0
+    MIN_PEAK_PNL_TO_TRACK: float = 12.0
+    PEAK_DRAWDOWN_CLOSE_PCT: float = 4.0
     
     # Трейлинг
-    TRAILING_ACTIVATE_PCT: float = 20.0
-    TRAILING_DRAWDOWN_CLOSE_PCT: float = 10.0
-    TRAILING_DISTANCE_PCT: float = 5.0
-    TRAILING_BREAKEVEN_PCT: float = 0.2
+    TRAILING_ACTIVATE_PCT: float = 8.0
+    TRAILING_DRAWDOWN_CLOSE_PCT: float = 4.0
+    TRAILING_DISTANCE_PCT: float = 2.0
+    TRAILING_BREAKEVEN_PCT: float = 0.1
     
     # Частичные TP (в % ROE)
     PARTIAL_TP_ENABLED = True
-    PARTIAL_TP1_PCT: float = 40.0   # Фиксируем 40%
-    PARTIAL_TP2_PCT: float = 80.0   # Фиксируем 30%
-    PARTIAL_TP3_PCT: float = 160.0  # Фиксируем остаток, оставляем раннер
+    PARTIAL_TP1_PCT: float = 15.0   # Фиксируем 40%
+    PARTIAL_TP2_PCT: float = 30.0   # Фиксируем 30%
+    PARTIAL_TP3_PCT: float = 60.0  # Фиксируем остаток, оставляем раннер
 
     # Время позиции
-    POSITION_TIMEOUT_HOURS: float = 2.0
+    POSITION_TIMEOUT_HOURS: float = 0.6
 
 config = StrategyConfig()
 
@@ -1361,14 +1361,42 @@ class SmartMoneyBot:
                 return False
             
             # Закрытие: для LONG продаём, для SHORT покупаем
-            if position.side == 'SHORT':
-                order = await self.exchange.create_market_buy_order(
-                    symbol, qty_close, params={'reduceOnly': True}
-                )
-            else:
-                order = await self.exchange.create_market_sell_order(
-                    symbol, qty_close, params={'reduceOnly': True}
-                )
+            try:
+                if position.side == 'SHORT':
+                    order = await self.exchange.create_market_buy_order(
+                        symbol,
+                        qty_close,
+                        params={'reduceOnly': True}
+                    )
+                else:
+                    order = await self.exchange.create_market_sell_order(
+                        symbol,
+                        qty_close,
+                        params={'reduceOnly': True}
+                    )
+
+            except Exception as close_error:
+                error_text = str(close_error)
+
+                # Binance иногда отклоняет reduceOnly
+                # особенно после частичных фиксаций или рассинхрона позиции
+                if '-2022' in error_text or 'ReduceOnly Order is rejected' in error_text:
+                    logger.warning(
+                        f"⚠️ ReduceOnly отклонен для {symbol}, повтор без reduceOnly"
+                    )
+
+                    if position.side == 'SHORT':
+                        order = await self.exchange.create_market_buy_order(
+                            symbol,
+                            qty_close
+                        )
+                    else:
+                        order = await self.exchange.create_market_sell_order(
+                            symbol,
+                            qty_close
+                        )
+                else:
+                    raise
             
             # Очистка оставшихся ордеров (SL/TP)
             try:
