@@ -1507,12 +1507,12 @@ class SmartMoneyBot:
 
             if position.side == 'SHORT':
                 chunk_pnl = (
-                    (position.entry_price - executed_price)
+                    (position.entry_price - current_price)
                     * qty_to_close
                 )
             else:
                 chunk_pnl = (
-                    (executed_price - position.entry_price)
+                    (current_price - position.entry_price)
                     * qty_to_close
                 )
 
@@ -1564,7 +1564,7 @@ class SmartMoneyBot:
 
 
     def calculate_position_roe(self, position, current_price):
-        """Корректный расчет ROE для LONG/SHORT"""
+        """Correct ROE calculation"""
 
         if position.side == 'SHORT':
             price_change_pct = (
@@ -1665,18 +1665,18 @@ class SmartMoneyBot:
 
                 if position.side == 'SHORT':
                     price_change_pct = (
-                        (position.entry_price - executed_price)
+                        (position.entry_price - current_price)
                         / position.entry_price
                     ) * 100
                 else:
                     price_change_pct = (
-                        (executed_price - position.entry_price)
+                        (current_price - position.entry_price)
                         / position.entry_price
                     ) * 100
                 if position.side == 'SHORT':
-                    pnl_usd = position.realized_pnl_usd + (position.entry_price - executed_price) * position.remaining_quantity
+                    pnl_usd = position.realized_pnl_usd + (position.entry_price - current_price) * position.remaining_quantity
                 else:
-                    pnl_usd = position.realized_pnl_usd + (executed_price - position.entry_price) * position.remaining_quantity
+                    pnl_usd = position.realized_pnl_usd + (current_price - position.entry_price) * position.remaining_quantity
 
                 # 3. Обновление пика (peak_pnl)
                 if isinstance(pnl_pct, (int, float)) and pnl_pct > position.peak_pnl:
