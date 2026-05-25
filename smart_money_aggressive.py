@@ -1,4 +1,28 @@
 
+
+# ================= TELEGRAM RETRY =================
+async def safe_telegram_send(send_func, *args, **kwargs):
+    import asyncio
+    for _ in range(3):
+        try:
+            return await send_func(*args, **kwargs)
+        except Exception:
+            await asyncio.sleep(2)
+# ==================================================
+
+
+
+# ================= SAFE FIXES =================
+def safe_division(a, b, default=0):
+    try:
+        if b == 0 or b is None:
+            return default
+        return a / b
+    except Exception:
+        return default
+# ==============================================
+
+
 # ================= TELEGRAM CONFLICT FIX =================
 # Запускайте только 1 экземпляр бота.
 # Иначе Telegram polling вызовет:
@@ -647,8 +671,8 @@ class SMCAnalyzer:
 
         # Smoothed values
         atr = sum(tr[:period]) / period
-        plus_di = [(sum(plus_dm[:period]) / atr) * 100]
-        minus_di = [(sum(minus_dm[:period]) / atr) * 100]
+        plus_di = [(sum(plus_dm[:period]) / max(atr, 1e-9)) * 100]
+        minus_di = [(sum(minus_dm[:period]) / max(atr, 1e-9)) * 100]
 
         dx = []
         if plus_di[0] + minus_di[0] > 0:
@@ -661,8 +685,8 @@ class SMCAnalyzer:
 
         for i in range(period, len(tr)):
             atr = (atr * (period - 1) + tr[i]) / period
-            pdi = ((plus_di[-1] * (period - 1) + (plus_dm[i] / atr) * 100) / period) if atr > 0 else 0
-            mdi = ((minus_di[-1] * (period - 1) + (minus_dm[i] / atr) * 100) / period) if atr > 0 else 0
+            pdi = ((plus_di[-1] * (period - 1) + (plus_dm[i] / max(atr, 1e-9)) * 100) / period) if atr > 0 else 0
+            mdi = ((minus_di[-1] * (period - 1) + (minus_dm[i] / max(atr, 1e-9)) * 100) / period) if atr > 0 else 0
             plus_di.append(pdi)
             minus_di.append(mdi)
 
@@ -1059,7 +1083,7 @@ class SmartMoneyBot:
             'ADA/USDT', 'AVAX/USDT', 'DOGE/USDT', 'DOT/USDT', 'LINK/USDT',
             'POL/USDT', 'UNI/USDT', 'ATOM/USDT', 'LTC/USDT', 'ETC/USDT',
             'NEAR/USDT', 'FIL/USDT', 'AAVE/USDT', 'ARB/USDT', 'OP/USDT',
-            'VANA/USDT', 'APT/USDT', 'INJ/USDT', 'RNDR/USDT', 'SUI/USDT',
+            'VANA/USDT', 'APT/USDT', 'INJ/USDT', 'RNDR/USDT:USDT', 'SUI/USDT',
             'SEI/USDT', 'TIA/USDT', 'ORDI/USDT', 'WLD/USDT', 'GALA/USDT', 
             'FET/USDT', 'STX/USDT', 'LDO/USDT', 'GRT/USDT', 'SAND/USDT', 
             'MANA/USDT', 'FTM/USDT', 'WIF/USDT', 'JUP/USDT', 'PYTH/USDT', 
@@ -1991,6 +2015,10 @@ class SmartMoneyBot:
         logger.info(f"Начало сканирования рынка... ({len(self.symbols_to_scan)} символов)")
 
         for symbol in self.symbols_to_scan:
+
+        if symbol not in exchange.markets:
+            logger.warning(f"Символ {symbol} не найден на Binance Futures")
+            continue
             # Проверка лимита
             if self.signals_today >= self.max_signals_per_day:
                 break
