@@ -1677,6 +1677,25 @@ class SmartMoneyBot:
                     await self.close_position(position_id)
                     continue
 
+                
+                # SMART EMERGENCY EXIT
+                if pnl_pct <= -18:
+                    weak_structure = (
+                        (position.side == "LONG" and current_price < ema20)
+                        or
+                        (position.side == "SHORT" and current_price > ema20)
+                    )
+
+                    if weak_structure:
+                        message = (
+                            f"🚨 SMART EMERGENCY EXIT | {pair}\n"
+                            f"ROE: {pnl_pct:+.1f}%\n"
+                            f"Структура сломана"
+                        )
+                        await self.send_telegram_message(message)
+                        await self.close_position(position_id)
+                        continue
+
                 # 3.5 Программный STOP LOSS (сравниваем price_change_pct с config.STOP_LOSS_PCT, т.к. стоп задан в % цены, а не ROE)
                 if price_change_pct <= -config.STOP_LOSS_PCT:
                     message = (
