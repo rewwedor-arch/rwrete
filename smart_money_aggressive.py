@@ -1,3 +1,10 @@
+
+# ================= TELEGRAM CONFLICT FIX =================
+# Запускайте только 1 экземпляр бота.
+# Иначе Telegram polling вызовет:
+# telegram.error.Conflict
+# ========================================================
+
 #!/usr/bin/env python3
 """
 Smart Money Aggressive Trading Bot
@@ -1059,7 +1066,7 @@ class SmartMoneyBot:
             'STRK/USDT', 'DYDX/USDT', 'GMX/USDT', 'CRV/USDT', 'CHZ/USDT', 
             'SNX/USDT', 'AXS/USDT', 'MKR/USDT', 'THETA/USDT', 'EGLD/USDT', 
             'RUNE/USDT', 'KAS/USDT', 'TON/USDT', 'IMX/USDT', 'MNT/USDT', 
-            'QNT/USDT', 'FLOKI/USDT', 'BOME/USDT', 'MEME/USDT', 'ALT/USDT'
+            'QNT/USDT', 'FLOKI/USDT:USDT', 'BOME/USDT', 'MEME/USDT', 'ALT/USDT'
         ]
 
         # Статус бота
