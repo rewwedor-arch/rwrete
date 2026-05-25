@@ -1315,7 +1315,7 @@ class SmartMoneyBot:
 
             # 3. SL
             try:
-                await self.exchange.create_order(
+                await self.safe_create_order(
                     symbol=symbol, type='STOP_MARKET', side=close_side,
                     amount=actual_qty,
                     params={'stopPrice': actual_sl, 'reduceOnly': True}
@@ -1325,7 +1325,7 @@ class SmartMoneyBot:
 
             # 4. TP
             try:
-                await self.exchange.create_order(
+                await self.safe_create_order(
                     symbol=symbol, type='TAKE_PROFIT_MARKET', side=close_side,
                     amount=actual_qty,
                     params={'stopPrice': actual_tp, 'reduceOnly': True}
@@ -1409,10 +1409,36 @@ class SmartMoneyBot:
             logger.error(f"Ошибка открытия позиции {symbol}: {e}")
             await self.send_telegram_message(f"❌ Ошибка открытия {symbol}: {e}")
             return None
+
+    async def safe_create_order(self, **kwargs):
+        """Безопасное создание ордера с retry при Binance timeout"""
+        import asyncio
+
+        for attempt in range(5):
+            try:
+                return await self.safe_create_order(**kwargs)
+
+            except Exception as e:
+                err = str(e)
+
+                if (
+                    "-1007" in err
+                    or "timeout" in err.lower()
+                    or "status unknown" in err.lower()
+                    or "execution status unknown" in err.lower()
+                ):
+                    logger.warning(f"⏳ Binance timeout, retry {attempt + 1}/5...")
+                    await asyncio.sleep(3)
+                    continue
+
+                raise e
+
+        raise Exception("Binance API timeout after 5 retries")
+
     async def safe_close_order(self, symbol, side, amount, reduce_only=True):
         for attempt in range(3):
             try:
-                return await self.exchange.create_order(
+                return await self.safe_create_order(
                     symbol=symbol,
                     type='market',
                     side=side,
@@ -1686,7 +1712,7 @@ class SmartMoneyBot:
 
             # Ставим новый SL
             close_side = 'BUY' if position.side == 'SHORT' else 'SELL'
-            await self.exchange.create_order(
+            await self.safe_create_order(
                 symbol=position.symbol,
                 type='STOP_MARKET',
                 side=close_side,
