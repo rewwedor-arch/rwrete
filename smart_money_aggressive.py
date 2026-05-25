@@ -1392,25 +1392,7 @@ class SmartMoneyBot:
             except Exception as close_error:
                 error_text = str(close_error)
 
-                # Binance иногда отклоняет reduceOnly
-                # особенно после частичных фиксаций или рассинхрона позиции
-                if '-2022' in error_text or 'ReduceOnly Order is rejected' in error_text:
-                    logger.warning(
-                        f"⚠️ ReduceOnly отклонен для {symbol}, повтор без reduceOnly"
-                    )
-
-                    if position.side == 'SHORT':
-                        order = await self.exchange.create_market_buy_order(
-                            symbol,
-                            qty_close
-                        )
-                    else:
-                        order = await self.exchange.create_market_sell_order(
-                            symbol,
-                            qty_close
-                        )
-                else:
-                    raise
+                raise
 
             # Очистка оставшихся ордеров (SL/TP)
             try:
@@ -1462,7 +1444,7 @@ class SmartMoneyBot:
                 f"🛒 Вход:  {position.entry_price:.5f}\n"
                 f"🏁 Выход: {exit_price:.5f}\n"
                 f"💰 Вложено: ${margin:.2f}\n"
-                f"📈 Зафиксировано: {'+' if total_pnl >= 0 else ''}${total_pnl:.2f} ({'+' if total_pnl >= 0 else ''}{pnl_pct:.1f}%)\n"
+                f"📈 REAL PnL: {'+' if total_pnl >= 0 else ''}${total_pnl:.2f} | REAL ROE: {'+' if total_pnl >= 0 else ''}{pnl_pct:.1f}%\n"
                 f"💼 Итог с баланса: ${margin + total_pnl:.2f}\n"
                 f"⏱ Время в сделке: {hours}ч {minutes}мин\n"
                 f"🔧 Плечо: x{position.leverage}\n"
@@ -1492,27 +1474,64 @@ class SmartMoneyBot:
     async def close_partial_position(self, position: Position, qty_to_close: float, current_price: float):
         """Частичное закрытие позиции"""
         try:
-            # Округляем количество до требований биржи
-            qty_to_close = float(self.exchange.amount_to_precision(position.symbol, qty_to_close))
+            qty_to_close = float(
+                self.exchange.amount_to_precision(
+                    position.symbol,
+                    qty_to_close
+                )
+            )
+
             if qty_to_close <= 0:
                 return
+
             if position.side == 'SHORT':
-                await self.exchange.create_market_buy_order(
-                    position.symbol, qty_to_close,
+                order = await self.exchange.create_market_buy_order(
+                    position.symbol,
+                    qty_to_close,
                     params={'reduceOnly': True}
                 )
-                chunk_pnl = (position.entry_price - current_price) * qty_to_close
             else:
-                await self.exchange.create_market_sell_order(
-                    position.symbol, qty_to_close,
+                order = await self.exchange.create_market_sell_order(
+                    position.symbol,
+                    qty_to_close,
                     params={'reduceOnly': True}
                 )
-                chunk_pnl = (current_price - position.entry_price) * qty_to_close
+
+            executed_price = (
+                order.get('average')
+                or order.get('price')
+                or current_price
+            )
+
+            executed_price = float(executed_price)
+
+            if position.side == 'SHORT':
+                chunk_pnl = (
+                    (position.entry_price - executed_price)
+                    * qty_to_close
+                )
+            else:
+                chunk_pnl = (
+                    (executed_price - position.entry_price)
+                    * qty_to_close
+                )
+
             position.realized_pnl_usd += chunk_pnl
-            position.remaining_quantity = max(0.0, position.remaining_quantity - qty_to_close)
-            logger.info(f"Частичное закрытие {position.symbol}: {qty_to_close} @ {current_price}, остаток {position.remaining_quantity}")
+            position.remaining_quantity = max(
+                0.0,
+                position.remaining_quantity - qty_to_close
+            )
+
+            logger.info(
+                f"Частичное закрытие {position.symbol}: "
+                f"{qty_to_close} @ {executed_price}, "
+                f"остаток {position.remaining_quantity}"
+            )
+
         except Exception as e:
-            logger.error(f"Ошибка частичного закрытия {position.symbol}: {e}")
+            logger.error(
+                f"Ошибка частичного закрытия {position.symbol}: {e}"
+            )
 
 
     async def _update_exchange_sl(self, position: Position, new_sl_price: float):
@@ -1545,7 +1564,8 @@ class SmartMoneyBot:
 
 
     def calculate_position_roe(self, position, current_price):
-        """Единый корректный расчет ROE для LONG/SHORT"""
+        """Корректный расчет ROE для LONG/SHORT"""
+
         if position.side == 'SHORT':
             price_change_pct = (
                 (position.entry_price - current_price)
@@ -1645,37 +1665,24 @@ class SmartMoneyBot:
 
                 if position.side == 'SHORT':
                     price_change_pct = (
-                        (position.entry_price - current_price)
+                        (position.entry_price - executed_price)
                         / position.entry_price
                     ) * 100
                 else:
                     price_change_pct = (
-                        (current_price - position.entry_price)
+                        (executed_price - position.entry_price)
                         / position.entry_price
                     ) * 100
                 if position.side == 'SHORT':
-                    pnl_usd = position.realized_pnl_usd + (position.entry_price - current_price) * position.remaining_quantity
+                    pnl_usd = position.realized_pnl_usd + (position.entry_price - executed_price) * position.remaining_quantity
                 else:
-                    pnl_usd = position.realized_pnl_usd + (current_price - position.entry_price) * position.remaining_quantity
+                    pnl_usd = position.realized_pnl_usd + (executed_price - position.entry_price) * position.remaining_quantity
 
                 # 3. Обновление пика (peak_pnl)
                 if isinstance(pnl_pct, (int, float)) and pnl_pct > position.peak_pnl:
                     position.peak_pnl = pnl_pct
 
                 pair = position.symbol.replace('/USDT', '')
-
-                
-                # HARD EMERGENCY EXIT
-                if pnl_pct <= -18:
-                    message = (
-                        f"🚨 HARD EMERGENCY EXIT | {pair}\n"
-                        f"ROE: {pnl_pct:+.1f}%\n"
-                        f"Причина: критический убыток\n"
-                        f"Позиция закрыта мгновенно"
-                    )
-                    await self.send_telegram_message(message)
-                    await self.close_position(position_id)
-                    continue
 
                 
                 # SMART EMERGENCY EXIT
