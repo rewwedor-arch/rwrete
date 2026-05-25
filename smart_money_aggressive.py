@@ -1410,7 +1410,29 @@ class SmartMoneyBot:
             await self.send_telegram_message(f"❌ Ошибка открытия {symbol}: {e}")
             return None
 
-    async def close_position(self, position_id: int, emergency: bool = False) -> bool:
+    
+    async def safe_close_order(self, symbol, side, amount, reduce_only=True):
+        for attempt in range(3):
+            try:
+                return await self.exchange.create_order(
+                    symbol=symbol,
+                    type='market',
+                    side=side,
+                    amount=amount,
+                    params={"reduceOnly": reduce_only}
+                )
+            except Exception as e:
+                err = str(e)
+
+                if "-1007" in err or "status unknown" in err.lower():
+                    await asyncio.sleep(2)
+                    continue
+
+                raise e
+
+        return None
+
+async def close_position(self, position_id: int, emergency: bool = False) -> bool:
         """Закрытие позиции"""
         try:
             if position_id not in self.positions:
