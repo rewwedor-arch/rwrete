@@ -1,8 +1,8 @@
 
 
 # ================= TELEGRAM RETRY =================
-    async def safe_telegram_send(send_func, *args, **kwargs):
-    import asyncio
+async def safe_telegram_send(send_func, *args, **kwargs):
+import asyncio
     for _ in range(3):
         try:
             return await send_func(*args, **kwargs)
@@ -57,7 +57,7 @@ import threading
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 elif sys.stdout:
-    import codecs
+import codecs
     sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer)
 
 from datetime import datetime, timedelta, timezone
@@ -169,7 +169,7 @@ ALLOW_TRADING = True
     При Extreme Fear (< 25) — приостановка открытия новых сделок.
     """
     global ALLOW_TRADING
-    import aiohttp as _aiohttp
+import aiohttp as _aiohttp
 
     while bot.is_running:
         try:
@@ -2273,7 +2273,7 @@ class SmartMoneyBot:
 
     def get_main_keyboard(self):
         """Создает клавиатуру с кнопками для управления"""
-        from telegram import ReplyKeyboardMarkup
+from telegram import ReplyKeyboardMarkup
         keyboard = [
             ['📊 Результаты', '🛑 Закрыть все'],
             ['🟢 Старт', '🔴 Стоп']
@@ -2287,7 +2287,7 @@ class SmartMoneyBot:
 
         text = update.message.text
         if text == '📊 Результаты':
-            from telegram import ReplyKeyboardMarkup
+from telegram import ReplyKeyboardMarkup
             keyboard = [
                 ['⏳ За 1 час', '⏳ За 5 часов', '⏳ За 10 часов'],
                 ['📅 За 24 часа', '📅 За 7 дней'],
@@ -2679,7 +2679,7 @@ class SmartMoneyBot:
                 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
 
                 try:
-                    from telegram import BotCommand
+from telegram import BotCommand
                     await app.bot.set_my_commands([
                         BotCommand("start", "Показать кнопки управления"),
                         BotCommand("balance", "Текущий баланс"),
@@ -2767,7 +2767,7 @@ class SmartMoneyBot:
         telegram_started = False
 
         # Запуск задач с логированием
-        async def task_with_log(name, coro):
+    async def task_with_log(name, coro):
             try:
                 await coro
             except Exception as e:
@@ -2824,7 +2824,7 @@ class SmartMoneyBot:
 # ============================================================================
 # ЗАПУСК
 # ============================================================================
-def _env_secret(*names: str) -> str:
+    def _env_secret(*names: str) -> str:
     """Читает первую непустую переменную окружения, убирает пробелы и BOM (частая причина -2015)."""
     for n in names:
         raw = os.getenv(n)
@@ -2836,7 +2836,7 @@ def _env_secret(*names: str) -> str:
     return ''
     async def main():
     """Точка входа"""
-    from dotenv import load_dotenv
+from dotenv import load_dotenv
 
     _root = Path(__file__).resolve().parent
     load_dotenv(_root / '.env')
