@@ -1374,23 +1374,90 @@ class SmartMoneyBot:
                 logger.warning(f"Нечего закрывать по позиции {position_id}")
                 return False
 
+            # Синхронизация с Binance перед закрытием
+            try:
+                exchange_positions = await self.exchange.fetch_positions([symbol])
+                real_position_exists = False
+                real_contracts = 0.0
+
+                for ep in exchange_positions:
+                    contracts = float(ep.get('contracts', 0) or 0)
+                    if abs(contracts) > 0:
+                        real_position_exists = True
+                        real_contracts = abs(contracts)
+                        break
+
+                # Если позиции на бирже уже нет — очищаем локальную позицию
+                if not real_position_exists:
+                    logger.warning(f"Позиция {symbol} уже закрыта на Binance")
+
+                    # Пытаемся получить последний realized pnl
+                    realized_pnl = 0.0
+                    try:
+                        income = await self.exchange.fetch_my_trades(symbol, limit=5)
+                        if income:
+                            last_trade = income[-1]
+                            realized_pnl = float(last_trade.get('realizedPnl', 0) or 0)
+                    except Exception as pnl_error:
+                        logger.warning(f"Не удалось получить realized pnl: {pnl_error}")
+
+                    self.db.update_daily_statistics(
+                        realized_pnl,
+                        0,
+                        count_as_trade=True,
+                        equity_reference=config.DEPOSIT
+                    )
+
+                    await self.send_telegram_message(
+                        f"ℹ️ Позиция {symbol} уже была закрыта на Binance\n"
+                        f"💰 Итоговый PnL: ${realized_pnl:.2f}"
+                    )
+
+                    if position_id in self.positions:
+                        del self.positions[position_id]
+
+                    return True
+
+                qty_close = min(qty_close, real_contracts)
+
+            except Exception as sync_error:
+                logger.warning(f"Ошибка синхронизации позиции: {sync_error}")
+
             # Закрытие: для LONG продаём, для SHORT покупаем
             try:
+                order_params = {
+                    'reduceOnly': True,
+                    'positionSide': 'BOTH'
+                }
+
                 if position.side == 'SHORT':
                     order = await self.exchange.create_market_buy_order(
                         symbol,
                         qty_close,
-                        params={'reduceOnly': True}
+                        params=order_params
                     )
                 else:
                     order = await self.exchange.create_market_sell_order(
                         symbol,
                         qty_close,
-                        params={'reduceOnly': True}
+                        params=order_params
                     )
 
             except Exception as close_error:
                 error_text = str(close_error)
+
+                # Binance: позиция уже закрыта
+                if '-2022' in error_text or 'ReduceOnly Order is rejected' in error_text:
+                    logger.warning(f"Позиция {symbol} уже закрыта")
+
+                    await self.send_telegram_message(
+                        f"ℹ️ Binance уже закрыл позицию {symbol}"
+                    )
+
+                    if position_id in self.positions:
+                        del self.positions[position_id]
+
+                    return True
 
                 raise
 
