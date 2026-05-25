@@ -53,6 +53,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+
+# ================= OPTIMIZED AGGRESSIVE SETTINGS =================
+# Изменения:
+# - фильтрация слабых входов усилена
+# - TP увеличен для лучшего RR
+# - weak momentum exit больше не режет сделки слишком рано
+# - SL ограничивает слив депозита
+# ================================================================
+
 # ============================================================================
 # КРИТИЧЕСКИ ВАЖНЫЕ ПАРАМЕТРЫ СТРАТЕГИИ
 # ============================================================================
@@ -63,14 +72,14 @@ class StrategyConfig:
     # Финансовые параметры
     DEPOSIT: float = 50.0  # Стартовый депозит USDT
     ENTRY_AMOUNT: float = 50.0  # Базовая сумма (используется если REINVEST=False)
-    LEVERAGE: int = 75  # Максимальное плечо для агрессивного разгона
+    LEVERAGE: int = 50  # Максимальное плечо для агрессивного разгона
 
     # Риск-менеджмент — ШИРОКИЙ КОРИДОР для высоковолатильных альтов
-    STOP_LOSS_PCT: float = 0.24  # Быстрый стоп для защиты депозита
-    TAKE_PROFIT_PCT: float = 1.0  
+    STOP_LOSS_PCT: float = 0.18  # Быстрый стоп для защиты депозита
+    TAKE_PROFIT_PCT: float = 1.8  
     TAKE_PROFIT: float = TAKE_PROFIT_PCT  
-    TP2_PCT: float = 2.0  
-    TP3_PCT: float = 4.0  
+    TP2_PCT: float = 3.2  
+    TP3_PCT: float = 5.5  
 
     # Цели
     DAILY_TARGET_MIN: float = 10.0  # Минимальная цель в день %
@@ -81,7 +90,7 @@ class StrategyConfig:
     DIRECTION: str = "BOTH"  # LONG и SHORT
 
     # Параметры сигналов — КЛАССИЧЕСКИЕ 7 ИНДИКАТОРОВ
-    MIN_INDICATORS_SCORE: int = 3  # Минимум 4 из 7
+    MIN_INDICATORS_SCORE: int = 6  # Минимум 4 из 7
     TOTAL_INDICATORS: int = 8
 
     # Таймфреймы
@@ -96,9 +105,9 @@ class StrategyConfig:
     DRAWDOWN_ALERT: float = 12.0
 
     # Momentum exit — закрытие слабых зависших сделок
-    MOMENTUM_EXIT_MINUTES: int = 40
-    MOMENTUM_MIN_PROFIT: float = 0.3
-    MOMENTUM_MIN_ADX: float = 18.0
+    MOMENTUM_EXIT_MINUTES: int = 90
+    MOMENTUM_MIN_PROFIT: float = 1.0
+    MOMENTUM_MIN_ADX: float = 24.0
 
     # ===================================================================
     # ПОРТФЕЛЬНАЯ СТРАТЕГИЯ
@@ -116,7 +125,7 @@ class StrategyConfig:
     TRAILING_DISTANCE_PCT: float = 6.0
     TRAILING_BREAKEVEN_PCT: float = 0.1
     # Экстренное закрытие плохой сделки
-    MAX_POSITION_LOSS_PCT: float = -22.0
+    MAX_POSITION_LOSS_PCT: float = -12.0
 
 
     # Частичные TP (в % ROE)
