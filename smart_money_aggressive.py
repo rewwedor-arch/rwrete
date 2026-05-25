@@ -231,6 +231,17 @@ class Database:
     """SQLite база данных для истории сделок и статистики"""
 
     def __init__(self, db_path: str = 'smart_money.db'):
+
+        self.symbols = [
+            "BTC/USDT",
+            "ETH/USDT",
+            "BNB/USDT",
+            "SOL/USDT",
+            "XRP/USDT",
+            "DOGE/USDT",
+            "ADA/USDT"
+        ]
+
         self.db_path = db_path
         self.init_db()
 
