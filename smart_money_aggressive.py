@@ -2,7 +2,7 @@
 
 # ================= TELEGRAM RETRY =================
 async def safe_telegram_send(send_func, *args, **kwargs):
-import asyncio
+    import asyncio
     for _ in range(3):
         try:
             return await send_func(*args, **kwargs)
@@ -57,7 +57,7 @@ import threading
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 elif sys.stdout:
-import codecs
+    import codecs
     sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer)
 
 from datetime import datetime, timedelta, timezone
@@ -164,12 +164,12 @@ config = StrategyConfig()
 # ПРЕДОХРАНИТЕЛЬ: НОВОСТНОЙ ФОН / НАСТРОЕНИЕ РЫНКА
 # ============================================================================
 ALLOW_TRADING = True
-    async def check_fear_greed_index(bot: 'SmartMoneyBot'):
+async def check_fear_greed_index(bot: 'SmartMoneyBot'):
     """Фоновая проверка Crypto Fear & Greed Index каждые 30 минут.
     При Extreme Fear (< 25) — приостановка открытия новых сделок.
     """
     global ALLOW_TRADING
-import aiohttp as _aiohttp
+    import aiohttp as _aiohttp
 
     while bot.is_running:
         try:
@@ -2273,7 +2273,7 @@ class SmartMoneyBot:
 
     def get_main_keyboard(self):
         """Создает клавиатуру с кнопками для управления"""
-from telegram import ReplyKeyboardMarkup
+        from telegram import ReplyKeyboardMarkup
         keyboard = [
             ['📊 Результаты', '🛑 Закрыть все'],
             ['🟢 Старт', '🔴 Стоп']
@@ -2287,7 +2287,7 @@ from telegram import ReplyKeyboardMarkup
 
         text = update.message.text
         if text == '📊 Результаты':
-from telegram import ReplyKeyboardMarkup
+            from telegram import ReplyKeyboardMarkup
             keyboard = [
                 ['⏳ За 1 час', '⏳ За 5 часов', '⏳ За 10 часов'],
                 ['📅 За 24 часа', '📅 За 7 дней'],
@@ -2679,7 +2679,7 @@ from telegram import ReplyKeyboardMarkup
                 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
 
                 try:
-from telegram import BotCommand
+                    from telegram import BotCommand
                     await app.bot.set_my_commands([
                         BotCommand("start", "Показать кнопки управления"),
                         BotCommand("balance", "Текущий баланс"),
