@@ -2014,7 +2014,7 @@ class SmartMoneyBot:
 
         logger.info(f"Начало сканирования рынка... ({len(self.symbols_to_scan)} символов)")
 
-        for symbol in symbols:
+        for symbol in self.symbols:
             if symbol not in exchange.markets:
                 logger.warning(f"Символ {symbol} не найден на Binance Futures")
                 continue
