@@ -17,7 +17,10 @@ def safe_division(a, b, default=0):
     try:
         if b == 0 or b is None:
             return default
-        return a / b
+        try:
+            return a / b
+        except ZeroDivisionError:
+            return default
     except Exception:
         return default
 # ==============================================
@@ -2025,7 +2028,7 @@ class SmartMoneyBot:
 
         logger.info(f"Начало сканирования рынка... ({len(self.symbols_to_scan)} символов)")
 
-        for symbol in self.symbols:
+        for symbol in self.symbols_to_scan:
             if symbol not in exchange.markets:
                 logger.warning(f"Символ {symbol} не найден на Binance Futures")
                 continue
@@ -2680,7 +2683,17 @@ class SmartMoneyBot:
 
                 await app.initialize()
                 await app.start()
-                await app.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+
+                try:
+                    await app.bot.delete_webhook(drop_pending_updates=True)
+                except Exception:
+                    pass
+
+                if app.updater and not app.updater.running:
+                    await app.updater.start_polling(
+                        allowed_updates=Update.ALL_TYPES,
+                        drop_pending_updates=True
+                    )
 
                 while self.is_running:
                     await asyncio.sleep(5)
