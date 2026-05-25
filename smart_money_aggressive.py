@@ -109,7 +109,7 @@ class StrategyConfig:
     LEVERAGE: int = 50  # Максимальное плечо для агрессивного разгона
 
     # Риск-менеджмент — ШИРОКИЙ КОРИДОР для высоковолатильных альтов
-    STOP_LOSS_PCT: float = 0.18  # Быстрый стоп для защиты депозита
+    STOP_LOSS_PCT: float = 1.5  # Стоп 1.5% от цены входа (= 75% ROE при x50)
     TAKE_PROFIT_PCT: float = 1.8  
     TAKE_PROFIT: float = TAKE_PROFIT_PCT  
     TP2_PCT: float = 3.2  
@@ -124,7 +124,7 @@ class StrategyConfig:
     DIRECTION: str = "BOTH"  # LONG и SHORT
 
     # Параметры сигналов — КЛАССИЧЕСКИЕ 7 ИНДИКАТОРОВ
-    MIN_INDICATORS_SCORE: int = 6  # Минимум 4 из 7
+    MIN_INDICATORS_SCORE: int = 4  # Минимум 4 из 8
     TOTAL_INDICATORS: int = 8
 
     # Таймфреймы
@@ -2029,7 +2029,7 @@ class SmartMoneyBot:
         logger.info(f"Начало сканирования рынка... ({len(self.symbols_to_scan)} символов)")
 
         for symbol in self.symbols_to_scan:
-            if symbol not in exchange.markets:
+            if symbol not in self.exchange.markets:
                 logger.warning(f"Символ {symbol} не найден на Binance Futures")
                 continue
             # Проверка лимита
