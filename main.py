@@ -52,6 +52,9 @@ async def run_bot_with_restart():
     config.STOP_LOSS_PCT = float(os.getenv('STOP_LOSS', config.STOP_LOSS_PCT))
     config.REINVEST_PROFITS = os.getenv('REINVEST_PROFITS', 'True').lower() == 'true'
     
+    logger.info(f"BOT CONFIG: DEPOSIT=${config.DEPOSIT} LEVERAGE=x{config.LEVERAGE} SL={config.STOP_LOSS_PCT}%")
+    print(f"[BOT] Config loaded: DEPOSIT=${config.DEPOSIT} LEVERAGE=x{config.LEVERAGE}", flush=True)
+    
     while True:
         try:
             if os.path.exists('.bot_stopped'):
@@ -59,22 +62,35 @@ async def run_bot_with_restart():
                 await asyncio.sleep(10)
                 continue
 
+            api_key = os.getenv('BINANCE_API_KEY', '')
+            api_secret = os.getenv('BINANCE_SECRET', '') or os.getenv('BINANCE_API_SECRET', '')
+            
+            if not api_key or not api_secret:
+                print("[BOT] ERROR: No API keys found in .env!", flush=True)
+                await asyncio.sleep(60)
+                continue
+            
+            print(f"[BOT] Creating SmartMoneyBot...", flush=True)
             bot = SmartMoneyBot(
-                api_key=os.getenv('BINANCE_API_KEY', ''),
-                api_secret=os.getenv('BINANCE_SECRET', '') or os.getenv('BINANCE_API_SECRET', ''),
+                api_key=api_key,
+                api_secret=api_secret,
                 telegram_token=os.getenv('TELEGRAM_BOT_TOKEN', ''),
                 telegram_chat_id=os.getenv('TELEGRAM_CHAT_ID', ''),
                 user_chat_id=os.getenv('USER_CHAT_ID', ''),
                 testnet=os.getenv('BINANCE_TESTNET', 'False').lower() == 'true'
             )
+            print(f"[BOT] Starting bot...", flush=True)
             started = await bot.start()
             if not started:
                 if os.path.exists('.bot_stopped'):
                     logger.info("Bot stopped by user command.")
                     continue
+                print(f"[BOT] Bot failed to start. Retrying in 60 sec...", flush=True)
                 logger.error("Bot failed to start. Retrying in 60 sec...")
                 await asyncio.sleep(60)
                 continue
+            else:
+                print(f"[BOT] Bot started successfully!", flush=True)
         except KeyboardInterrupt:
             logger.info("Bot stopped by Ctrl+C")
             break

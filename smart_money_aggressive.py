@@ -119,35 +119,15 @@ class StrategyConfig:
     DAILY_TARGET_MIN: float = 10.0  # Минимальная цель в день %
     DAILY_TARGET_MAX: float = 15.0  # Максимальная цель в день %
 
-    # Режим работы
-    WORK_HOURS: str = "24/7"
-    DIRECTION: str = "BOTH"  # LONG и SHORT
-
-    # Параметры сигналов — КЛАССИЧЕСКИЕ 7 ИНДИКАТОРОВ
-    MIN_INDICATORS_SCORE: int = 4  # Минимум 4 из 8
+    # Параметры сигналов
+    MIN_INDICATORS_SCORE: int = 3  # Минимум 3 из 8 (снижено для агрессивного режима)
     TOTAL_INDICATORS: int = 8
-
-    # Таймфреймы
     SCANNER_TIMEFRAME: str = '5m'
     TREND_TIMEFRAME: str = '15m'
-    EMA_TIMEFRAME: str = '1h'
 
-    # Алёрты по прибыли (в % ROE с учётом плеча)
-    PROFIT_ALERT_10: float = 50.0    # +50% ROE
-    PROFIT_ALERT_15: float = 150.0   # +150% ROE
-    PROFIT_ALERT_40: float = 300.0   # +300% ROE
-    DRAWDOWN_ALERT: float = 12.0
-
-    # Momentum exit — закрытие слабых зависших сделок
-    MOMENTUM_EXIT_MINUTES: int = 90
-    MOMENTUM_MIN_PROFIT: float = 1.0
-    MOMENTUM_MIN_ADX: float = 24.0
-
-    # ===================================================================
-    # ПОРТФЕЛЬНАЯ СТРАТЕГИЯ
-    # ===================================================================
+    # Режим работы
     REINVEST_PROFITS: bool = True   # Реинвестировать прибыль
-    MIN_SLOT_USDT: float = 5.0     # Минимальный капитал на 1 сделку ($)
+    MIN_SLOT_USDT: float = 1.0     # Минимальный капитал на 1 сделку ($) - снижено для агрессивного разгона
 
     # Выход по откату от пика (в % ROE)
     MIN_PEAK_PNL_TO_TRACK: float = 12.0
@@ -160,7 +140,10 @@ class StrategyConfig:
     TRAILING_BREAKEVEN_PCT: float = 0.1
     # Экстренное закрытие плохой сделки
     MAX_POSITION_LOSS_PCT: float = -12.0
-
+    MOMENTUM_EXIT_MINUTES: int = 60
+    MOMENTUM_MIN_PROFIT: float = 2.0
+    MOMENTUM_MIN_ADX: float = 25.0
+    DRAWDOWN_ALERT: float = 12.0
 
     # Частичные TP (в % ROE)
     PARTIAL_TP_ENABLED = True
@@ -1091,20 +1074,20 @@ class SmartMoneyBot:
         # Активные позиции
         self.positions: Dict[int, Position] = {}
 
-        # Список символов для сканирования
+        # Список символов для сканирования (формат USDT-M futures для ccxt)
         self.symbols_to_scan = [
-            'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT',
-            'ADA/USDT', 'AVAX/USDT', 'DOGE/USDT', 'DOT/USDT', 'LINK/USDT',
-            'POL/USDT', 'UNI/USDT', 'ATOM/USDT', 'LTC/USDT', 'ETC/USDT',
-            'NEAR/USDT', 'FIL/USDT', 'AAVE/USDT', 'ARB/USDT', 'OP/USDT',
-            'VANA/USDT', 'APT/USDT', 'INJ/USDT', 'RNDR/USDT:USDT', 'SUI/USDT',
-            'SEI/USDT', 'TIA/USDT', 'ORDI/USDT', 'WLD/USDT', 'GALA/USDT', 
-            'FET/USDT', 'STX/USDT', 'LDO/USDT', 'GRT/USDT', 'SAND/USDT', 
-            'MANA/USDT', 'FTM/USDT', 'WIF/USDT', 'JUP/USDT', 'PYTH/USDT', 
-            'STRK/USDT', 'DYDX/USDT', 'GMX/USDT', 'CRV/USDT', 'CHZ/USDT', 
-            'SNX/USDT', 'AXS/USDT', 'MKR/USDT', 'THETA/USDT', 'EGLD/USDT', 
-            'RUNE/USDT', 'KAS/USDT', 'TON/USDT', 'IMX/USDT', 'MNT/USDT', 
-            'QNT/USDT', 'FLOKI/USDT:USDT', 'BOME/USDT', 'MEME/USDT', 'ALT/USDT'
+            'BTC/USDT:USDT', 'ETH/USDT:USDT', 'BNB/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT',
+            'ADA/USDT:USDT', 'AVAX/USDT:USDT', 'DOGE/USDT:USDT', 'DOT/USDT:USDT', 'LINK/USDT:USDT',
+            'POL/USDT:USDT', 'UNI/USDT:USDT', 'ATOM/USDT:USDT', 'LTC/USDT:USDT', 'ETC/USDT:USDT',
+            'NEAR/USDT:USDT', 'FIL/USDT:USDT', 'AAVE/USDT:USDT', 'ARB/USDT:USDT', 'OP/USDT:USDT',
+            'VANA/USDT:USDT', 'APT/USDT:USDT', 'INJ/USDT:USDT', 'RNDR/USDT:USDT', 'SUI/USDT:USDT',
+            'SEI/USDT:USDT', 'TIA/USDT:USDT', 'ORDI/USDT:USDT', 'WLD/USDT:USDT', 'GALA/USDT:USDT', 
+            'FET/USDT:USDT', 'STX/USDT:USDT', 'LDO/USDT:USDT', 'GRT/USDT:USDT', 'SAND/USDT:USDT', 
+            'MANA/USDT:USDT', 'FTM/USDT:USDT', 'WIF/USDT:USDT', 'JUP/USDT:USDT', 'PYTH/USDT:USDT', 
+            'STRK/USDT:USDT', 'DYDX/USDT:USDT', 'GMX/USDT:USDT', 'CRV/USDT:USDT', 'CHZ/USDT:USDT', 
+            'SNX/USDT:USDT', 'AXS/USDT:USDT', 'MKR/USDT:USDT', 'THETA/USDT:USDT', 'EGLD/USDT:USDT', 
+            'RUNE/USDT:USDT', 'KAS/USDT:USDT', 'TON/USDT:USDT', 'IMX/USDT:USDT', 'MNT/USDT:USDT', 
+            'QNT/USDT:USDT', 'FLOKI/USDT:USDT', 'BOME/USDT:USDT', 'MEME/USDT:USDT', 'ALT/USDT:USDT'
         ]
 
         # Статус бота
@@ -1162,6 +1145,7 @@ class SmartMoneyBot:
             return True
         except Exception as e:
             logger.error(f"Ошибка подключения к бирже: {e}")
+            print(f"[BOT] Exchange connection error: {e}", flush=True)
             return False
 
     def compute_optimal_slots(self, virtual_equity: float) -> int:
@@ -1196,8 +1180,10 @@ class SmartMoneyBot:
                 f"score={score} entry={entry_price}"
             )
 
-            if free_equity < config.MIN_SLOT_USDT:
-                logger.warning(f"POS_SIZE: free_equity({free_equity}) < MIN_SLOT({config.MIN_SLOT_USDT})")
+            # Минимальная маржа = MIN_SLOT_USDT, но не более free_equity
+            min_margin = min(config.MIN_SLOT_USDT, free_equity * 0.5)
+            if free_equity < min_margin:
+                logger.warning(f"POS_SIZE: free_equity({free_equity:.2f}) < min_margin({min_margin:.2f})")
                 return 0, 0, 0
 
             optimal_slots = self.compute_optimal_slots(free_equity)
@@ -1206,16 +1192,21 @@ class SmartMoneyBot:
             weight = max(score, config.MIN_INDICATORS_SCORE) / 5.0
             amount_usdt = base_slot * weight
             amount_usdt = min(amount_usdt, free_equity)
-            if amount_usdt < config.MIN_SLOT_USDT:
-                if free_equity >= config.MIN_SLOT_USDT:
-                    amount_usdt = config.MIN_SLOT_USDT
+            
+            # Гарантируем минимум для входа
+            if amount_usdt < min_margin:
+                if free_equity >= min_margin:
+                    amount_usdt = min_margin
                 else:
-                    logger.warning(f"POS_SIZE: amount_usdt({amount_usdt}) < MIN_SLOT but free_equity also < MIN_SLOT")
+                    logger.warning(f"POS_SIZE: amount_usdt({amount_usdt:.2f}) < min_margin but free_equity also < min_margin")
                     return 0, 0, 0
 
-            quantity = amount_usdt * config.LEVERAGE / entry_price
-            logger.info(f"POS_SIZE result: qty={amount_usdt}={amount_usdt} margin={amount_usdt} notional={amount_usdt * config.LEVERAGE}")
-            return quantity, amount_usdt, amount_usdt * config.LEVERAGE
+            # amount_usdt это маржа (не номинал!), номинал = маржа * плечо
+            notional = amount_usdt * config.LEVERAGE
+            quantity = notional / entry_price
+            
+            logger.info(f"POS_SIZE result: margin=${amount_usdt:.2f} notional=${notional:.2f} qty={quantity}")
+            return quantity, amount_usdt, notional
         except Exception as e:
             logger.error(f"Ошибка в calculate_position_size: {e}", exc_info=True)
             return 0, 0, 0
@@ -1271,7 +1262,7 @@ class SmartMoneyBot:
                 err_str = str(lev_err)
                 if '-2015' in err_str or 'Invalid API-key' in err_str or 'permissions' in err_str:
                     raise
-                for fallback_lev in [50, 20]:
+                for fallback_lev in [50, 25, 20, 10, 5]:
                     try:
                         await self.exchange.set_leverage(fallback_lev, symbol)
                         actual_leverage = fallback_lev
@@ -1281,6 +1272,11 @@ class SmartMoneyBot:
 
             # 2. Открытие позиции
             try:
+                try:
+                    await self.exchange.cancel_all_orders(symbol)
+                except Exception:
+                    pass
+                
                 if direction == 'SHORT':
                     order = await self.exchange.create_market_sell_order(symbol, quantity)
                 else:
@@ -2071,7 +2067,11 @@ class SmartMoneyBot:
                 entry_price = ticker['last']
 
                 # Открытие позиции
-                await self.open_position(symbol, entry_price, smc_result)
+                position = await self.open_position(symbol, entry_price, smc_result)
+                if position:
+                    logger.info(f"✅ ПОЗИЦИЯ ОТКРЫТА: {symbol} {position.side} @ {entry_price}")
+                else:
+                    logger.warning(f"❌ ПОЗИЦИЯ НЕ ОТКРЫТА: {symbol} (open_position вернул None)")
 
                 # Пауза между сделками
                 await asyncio.sleep(5)
@@ -2696,6 +2696,9 @@ class SmartMoneyBot:
                     )
 
                 while self.is_running:
+                    if app.updater and not app.updater.running:
+                        logger.warning("Telegram polling stopped. Restarting...")
+                        break
                     await asyncio.sleep(5)
 
             except telegram.error.Conflict as e:
