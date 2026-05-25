@@ -2768,6 +2768,12 @@ class SmartMoneyBot:
 
         # Запуск задач с логированием
     async def task_with_log(name, coro):
+        try:
+            await coro
+        except Exception as e:
+            logger.error(f"Task '{name}' finished with error: {e}")
+        finally:
+            logger.warning(f"Task '{name}' finished!")
     try:
                 await coro
     except Exception as e:
