@@ -2768,11 +2768,11 @@ class SmartMoneyBot:
 
         # Запуск задач с логированием
     async def task_with_log(name, coro):
-            try:
+    try:
                 await coro
-            except Exception as e:
+    except Exception as e:
                 logger.error(f"Task '{name}' finished with error: {e}")
-            finally:
+    finally:
                 logger.warning(f"Task '{name}' finished!")
 
         # Уведомление о запуске
@@ -2792,7 +2792,7 @@ class SmartMoneyBot:
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"SMART MONEY BOT v2.0"
             )
-        except Exception as e:
+except Exception as e:
             logger.warning(f"Не удалось отправить стартовое сообщение: {e}")
 
         tasks = [
