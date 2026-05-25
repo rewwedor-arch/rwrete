@@ -1685,12 +1685,36 @@ class SmartMoneyBot:
                 pair = position.symbol.replace('/USDT', '')
 
                 
+                # Получаем EMA20 заранее для emergency/trend анализа
+                ema20_value = None
+                ohlcv_5m = None
+
+                try:
+                    ohlcv_5m = await self.smc_analyzer.get_ohlcv(
+                        position.symbol,
+                        '5m',
+                        limit=25
+                    )
+
+                    if ohlcv_5m:
+                        closes = [c[4] for c in ohlcv_5m]
+                        ema20_list = self.smc_analyzer.calculate_ema(
+                            closes,
+                            20
+                        )
+
+                        if ema20_list:
+                            ema20_value = ema20_list[-1]
+
+                except Exception:
+                    ema20_value = None
+
                 # SMART EMERGENCY EXIT
-                if pnl_pct <= -18:
+                if pnl_pct <= -18 and ema20_value is not None:
                     weak_structure = (
-                        (position.side == "LONG" and current_price < ema20)
+                        (position.side == "LONG" and current_price < ema20_value)
                         or
-                        (position.side == "SHORT" and current_price > ema20)
+                        (position.side == "SHORT" and current_price > ema20_value)
                     )
 
                     if weak_structure:
@@ -1720,15 +1744,16 @@ class SmartMoneyBot:
                 if price_change_pct <= -1.5 and position.peak_pnl < 5.0:
                     # Получаем свечи для анализа тренда
                     try:
-                        ohlcv_5m = await self.smc_analyzer.get_ohlcv(position.symbol, '5m', limit=20)
                         if ohlcv_5m and len(ohlcv_5m) >= 10:
                             closes = [c[4] for c in ohlcv_5m]
                             # Простой анализ: последние 5 свечей вниз?
                             last_5 = closes[-5:]
                             downtrend = all(last_5[i] >= last_5[i+1] for i in range(len(last_5)-1))
                             # EMA анализ
-                            ema20 = self.smc_analyzer.calculate_ema(closes, 20)
-                            below_ema = ema20 and current_price < ema20[-1]
+                            below_ema = (
+                                ema20_value is not None
+                                and current_price < ema20_value
+                            )
 
                             if downtrend and below_ema:
                                 message = (
