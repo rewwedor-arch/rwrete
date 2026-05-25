@@ -981,13 +981,13 @@ class SMCAnalyzer:
                     short_ind['volume_spike'] = True
 
             # ═══ Выбираем лучшее направление ═══
-            # СИГНАЛ ВАЛИДЕН ТОЛЬКО ЕСЛИ ЕСТЬ SMC СТРУКТУРА (FVG или OB)
-            if long_score >= short_score and long_score >= config.MIN_INDICATORS_SCORE and has_smc_structure:
+            # СИГНАЛ ВАЛИДЕН если набрано >= MIN_INDICATORS_SCORE очков
+            if long_score >= short_score and long_score >= config.MIN_INDICATORS_SCORE:
                 result['score'] = long_score
                 result['direction'] = 'LONG'
                 result['indicators'] = long_ind
                 result['signal'] = True
-            elif short_score > long_score and short_score >= config.MIN_INDICATORS_SCORE and has_smc_structure:
+            elif short_score > long_score and short_score >= config.MIN_INDICATORS_SCORE:
                 result['score'] = short_score
                 result['direction'] = 'SHORT'
                 result['indicators'] = short_ind
@@ -2051,17 +2051,17 @@ class SmartMoneyBot:
             if smc_result['signal'] and smc_result['score'] >= config.MIN_INDICATORS_SCORE:
                 logger.info(f"СИГНАЛ найден: {symbol} (score: {smc_result['score']}/{config.TOTAL_INDICATORS})")
 
-                # Фильтр Funding Rate (защита от толпы)
+                # Фильтр Funding Rate (защита от экстремального перекоса)
                 try:
                     funding_info = await self.exchange.fetch_funding_rate(symbol)
                     funding_rate = float(funding_info.get('fundingRate', 0))
                     direction = smc_result.get('direction', 'LONG')
 
-                    if direction == 'LONG' and funding_rate > 0.0005:
-                        logger.info(f"Пропуск LONG {symbol}: толпа в лонгах (funding={funding_rate:.4%})")
+                    if direction == 'LONG' and funding_rate > 0.003:
+                        logger.info(f"Пропуск LONG {symbol}: экстремальный funding={funding_rate:.4%}")
                         continue
-                    elif direction == 'SHORT' and funding_rate < -0.0005:
-                        logger.info(f"Пропуск SHORT {symbol}: толпа в шортах (funding={funding_rate:.4%})")
+                    elif direction == 'SHORT' and funding_rate < -0.003:
+                        logger.info(f"Пропуск SHORT {symbol}: экстремальный funding={funding_rate:.4%}")
                         continue
                 except Exception:
                     pass  # если API не поддерживает — пропускаем фильтр
