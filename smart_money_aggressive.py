@@ -1,7 +1,7 @@
 
 
 # ================= TELEGRAM RETRY =================
-async def safe_telegram_send(send_func, *args, **kwargs):
+    async def safe_telegram_send(send_func, *args, **kwargs):
     import asyncio
     for _ in range(3):
         try:
@@ -164,7 +164,7 @@ config = StrategyConfig()
 # ПРЕДОХРАНИТЕЛЬ: НОВОСТНОЙ ФОН / НАСТРОЕНИЕ РЫНКА
 # ============================================================================
 ALLOW_TRADING = True
-async def check_fear_greed_index(bot: 'SmartMoneyBot'):
+    async def check_fear_greed_index(bot: 'SmartMoneyBot'):
     """Фоновая проверка Crypto Fear & Greed Index каждые 30 минут.
     При Extreme Fear (< 25) — приостановка открытия новых сделок.
     """
@@ -1409,8 +1409,6 @@ class SmartMoneyBot:
             logger.error(f"Ошибка открытия позиции {symbol}: {e}")
             await self.send_telegram_message(f"❌ Ошибка открытия {symbol}: {e}")
             return None
-
-    
     async def safe_close_order(self, symbol, side, amount, reduce_only=True):
         for attempt in range(3):
             try:
@@ -1432,7 +1430,7 @@ class SmartMoneyBot:
 
         return None
 
-async def close_position(self, position_id: int, emergency: bool = False) -> bool:
+    async def close_position(self, position_id: int, emergency: bool = False) -> bool:
         """Закрытие позиции"""
         try:
             if position_id not in self.positions:
@@ -1603,7 +1601,6 @@ async def close_position(self, position_id: int, emergency: bool = False) -> boo
             logger.error(f"Ошибка закрытия позиции {position_id}: {e}")
             await self.send_telegram_message(f"❌ Ошибка закрытия: {e}")
             return False
-
     async def close_all_positions(self, emergency: bool = False):
         """Закрытие всех позиций"""
         position_ids = list(self.positions.keys())
@@ -2837,7 +2834,7 @@ def _env_secret(*names: str) -> str:
         if s:
             return s
     return ''
-async def main():
+    async def main():
     """Точка входа"""
     from dotenv import load_dotenv
 
