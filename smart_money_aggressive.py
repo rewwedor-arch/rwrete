@@ -2767,18 +2767,12 @@ class SmartMoneyBot:
         telegram_started = False
 
         # Запуск задач с логированием
-    async def task_with_log(name, coro):
-        try:
-            await coro
-        except Exception as e:
-            logger.error(f"Task '{name}' finished with error: {e}")
-        finally:
-            logger.warning(f"Task '{name}' finished!")
-    try:
+        async def task_with_log(name, coro):
+            try:
                 await coro
-    except Exception as e:
+            except Exception as e:
                 logger.error(f"Task '{name}' finished with error: {e}")
-    finally:
+            finally:
                 logger.warning(f"Task '{name}' finished!")
 
         # Уведомление о запуске
@@ -2798,7 +2792,7 @@ class SmartMoneyBot:
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"SMART MONEY BOT v2.0"
             )
-except Exception as e:
+        except Exception as e:
             logger.warning(f"Не удалось отправить стартовое сообщение: {e}")
 
         tasks = [
@@ -2827,22 +2821,24 @@ except Exception as e:
         await self.disconnect()
 
 
+
 # ============================================================================
 # ЗАПУСК
 # ============================================================================
-    def _env_secret(*names: str) -> str:
-    """Читает первую непустую переменную окружения, убирает пробелы и BOM (частая причина -2015)."""
+def _env_secret(*names: str) -> str:
+    """Читает первую непустую переменную окружения, убирает пробелы и BOM."""
     for n in names:
         raw = os.getenv(n)
         if raw is None:
             continue
-        s = raw.strip().strip('\ufeff').strip('"').strip("'")
+        s = raw.strip().strip("\ufeff").strip('"').strip("\'")
         if s:
             return s
     return ''
-    async def main():
+
+async def main():
     """Точка входа"""
-from dotenv import load_dotenv
+    from dotenv import load_dotenv
 
     _root = Path(__file__).resolve().parent
     load_dotenv(_root / '.env')
@@ -2862,12 +2858,10 @@ from dotenv import load_dotenv
     config.DRAWDOWN_ALERT = float(os.getenv('DRAWDOWN_ALERT', '12.0'))
     use_testnet = os.getenv('BINANCE_TESTNET', 'False').lower() == 'true'
 
-    # Проверка наличия ключей
     if not all([API_KEY, API_SECRET, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
         logger.warning("⚠️ Не настроены переменные окружения! Бот будет работать только с aiohttp сервером.")
-        logger.warning("   Установите: BINANCE_API_KEY, BINANCE_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID")
+        logger.warning("Установите: BINANCE_API_KEY, BINANCE_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID")
 
-    # Создание и запуск бота
     bot = SmartMoneyBot(
         api_key=API_KEY,
         api_secret=API_SECRET,
@@ -2881,7 +2875,6 @@ from dotenv import load_dotenv
         started = await bot.start()
         if started is False:
             logger.warning("⚠️ Бот не подключился к Binance. Повторная попытка через 60 сек...")
-            # Не выходим, а ждём и пробуем снова
             while True:
                 await asyncio.sleep(60)
                 started = await bot.start()
