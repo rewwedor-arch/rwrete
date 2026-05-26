@@ -1032,7 +1032,7 @@ class SmartMoneyBot:
                 'defaultType': 'future',
                 'recvWindow': 60000,
                 'adjustForTimeDifference': True,  # <--- Вот эта запятая обязательна!
-                'keepAlive': True                 # <--- Отступ на уровне с остальными
+                'keepAlive': False                 # <--- Отступ на уровне с остальными
             }
         }
 
@@ -1819,8 +1819,14 @@ class SmartMoneyBot:
                         await self.close_position(position_id)
                         continue
 
-                # Частичная фиксация
-                if pnl_pct >= config.PARTIAL_TP1_PCT and not position.partial_tp1_done:
+                # УМНАЯ ЧАСТИЧНАЯ ФИКСАЦИЯ TP1 (По графику ATR)
+                is_tp1_hit = False
+                if position.side == 'LONG' and current_price >= position.take_profit:
+                    is_tp1_hit = True
+                elif position.side == 'SHORT' and current_price <= position.take_profit:
+                    is_tp1_hit = True
+
+                if is_tp1_hit and not position.partial_tp1_done:
                     position.partial_tp1_done = True
                     await self.close_partial_position(position, position.quantity * 0.40, current_price)
                     new_sl = (position.entry_price * (1 - 0.001)
@@ -1828,8 +1834,8 @@ class SmartMoneyBot:
                               else position.entry_price * (1 + 0.001))
                     await self._update_exchange_sl(position, new_sl)
                     await self.send_telegram_message(
-                        f"💰 ЧАСТИЧНАЯ ФИКСАЦИЯ TP1 | {pair}\n"
-                        f"+{config.PARTIAL_TP1_PCT:.0f}% ROE — закрыто 40% | SL → безубыток"
+                        f"💰 ЧАСТИЧНАЯ ФИКСАЦИЯ TP1 (ATR) | {pair}\n"
+                        f"Достигнута цель по волатильности! Закрыто 40% | SL → безубыток"
                     )
 
                 if pnl_pct >= config.PARTIAL_TP2_PCT and not position.partial_tp2_done:
