@@ -830,7 +830,7 @@ class SMCAnalyzer:
 
         try:
             ohlcv_5m = await self.get_ohlcv(symbol, config.SCANNER_TIMEFRAME, limit=100)
-            ohlcv_15m = await self.get_ohlcv(symbol, config.TREND_TIMEFRAME, limit=100)
+            ohlcv_15m = await self.get_ohlcv(symbol, config.TREND_TIMEFRAME, limit=200)
 
             if not ohlcv_5m or not ohlcv_15m:
                 return result
@@ -1018,11 +1018,12 @@ class SmartMoneyBot:
             'apiKey': api_key,
             'secret': api_secret,
             'enableRateLimit': True,
-            'timeout': 30000,  # Ждем ответа от Binance до 30 секунд
+            'timeout': 30000,
             'options': {
                 'defaultType': 'future',
                 'recvWindow': 60000,
-                'adjustForTimeDifference': True
+                'adjustForTimeDifference': True,  # <--- Вот эта запятая обязательна!
+                'keepAlive': True                 # <--- Отступ на уровне с остальными
             }
         }
 
@@ -1345,12 +1346,18 @@ class SmartMoneyBot:
             )
 
             # --- УМНЫЕ ДИНАМИЧЕСКИЕ ЦЕЛИ ПО ГРАФИКУ (ATR) ---
+            # --- УМНЫЕ ДИНАМИЧЕСКИЕ ЦЕЛИ ПО ГРАФИКУ (ATR) С ПРЕДОХРАНИТЕЛЕМ ---
             atr = smc_result.get('atr', 0)
             
-            # Если ATR посчитался, используем его. Если нет - берем дефолтный процент как страховку.
-            # Настройки RR (Risk Reward): Стоп = 1.5 ATR, TP1 = 1.5 ATR, TP3 = 4 ATR
+            # Жесткий лимит убытка: не более 1.5% движения цены (с 50х плечом это -75% ROE, с 20x это -30% ROE)
+            max_sl_dist = actual_entry * 0.015  
+
             if atr > 0:
                 sl_dist = atr * 1.5
+                # Если ATR слишком большой, режем стоп-лосс до безопасного максимума
+                if sl_dist > max_sl_dist:
+                    sl_dist = max_sl_dist
+                    
                 tp1_dist = atr * 1.5 
                 tp3_dist = atr * 4.0
             else:
@@ -1722,38 +1729,7 @@ class SmartMoneyBot:
                     position.dynamic_sl_level = 1
                     logger.info(f"BREAKEVEN ACTIVATED: {position.symbol}")
 
-                # Momentum Exit
-                position_age = self.get_position_age_minutes(position)
-
-                current_adx = 0
-                ohlcv_5m = None
-                ema20_value = None
-
-                try:
-                    ohlcv_5m = await self.smc_analyzer.get_ohlcv(position.symbol, '5m', limit=40)
-                    if ohlcv_5m:
-                        closes = [c[4] for c in ohlcv_5m]
-                        highs = [x[2] for x in ohlcv_5m]
-                        lows = [x[3] for x in ohlcv_5m]
-
-                        adx_values = self.smc_analyzer.calculate_adx(highs, lows, closes)
-                        current_adx = adx_values[-1] if adx_values else 0
-
-                        ema20_list = self.smc_analyzer.calculate_ema(closes, 20)
-                        if ema20_list:
-                            ema20_value = ema20_list[-1]
-                except Exception:
-                    pass
-
-                if (position_age > config.MOMENTUM_EXIT_MINUTES
-                        and pnl_pct < config.MOMENTUM_MIN_PROFIT
-                        and current_adx < config.MOMENTUM_MIN_ADX):
-                    logger.info(
-                        f"MOMENTUM EXIT: {position.symbol} | "
-                        f"Age={position_age:.1f}m | PNL={pnl_pct:.2f}% | ADX={current_adx:.1f}"
-                    )
-                    await self.close_position(position.id)
-                    continue
+ 
 
                 if position.side == 'SHORT':
                     price_change_pct = (
@@ -1774,56 +1750,25 @@ class SmartMoneyBot:
 
                 pair = position.symbol.replace('/USDT', '')
 
-                # SMART EMERGENCY EXIT
-                if pnl_pct <= -18 and ema20_value is not None:
-                    weak_structure = (
-                        (position.side == "LONG" and current_price < ema20_value)
-                        or (position.side == "SHORT" and current_price > ema20_value)
-                    )
-                    if weak_structure:
-                        message = (
-                            f"🚨 SMART EMERGENCY EXIT | {pair}\n"
-                            f"ROE: {pnl_pct:+.1f}%\n"
-                            f"Структура сломана"
-                        )
-                        await self.send_telegram_message(message)
-                        await self.close_position(position_id)
-                        continue
+                # Программный STOP LOSS (Синхронизирован с умным ATR)
+                is_sl_hit = False
+                if position.side == 'LONG' and current_price <= position.stop_loss:
+                    is_sl_hit = True
+                elif position.side == 'SHORT' and current_price >= position.stop_loss:
+                    is_sl_hit = True
 
-                # Программный STOP LOSS
-                if price_change_pct <= -config.STOP_LOSS_PCT:
+                if is_sl_hit:
                     message = (
-                        f"❌ ПРОГРАММНЫЙ STOP LOSS | {pair}\n"
-                        f"Убыток по цене: {price_change_pct:+.2f}%\n"
+                        f"❌ STOP LOSS | {pair}\n"
+                        f"Убыток по ROE: {pnl_pct:+.1f}%\n"
                         f"💰 Вложено: ${position.amount_usdt:.2f}\n"
-                        f"Текущий PnL: {pnl_pct:+.1f}% ({'+' if pnl_usd >= 0 else ''}${pnl_usd:.2f})"
+                        f"Текущий PnL: {'+' if pnl_usd >= 0 else ''}${pnl_usd:.2f}"
                     )
                     await self.send_telegram_message(message)
                     await self.close_position(position_id)
                     continue
 
-                # Анализ тренда для убыточных позиций
-                if price_change_pct <= -1.5 and position.peak_pnl < 5.0:
-                    try:
-                        if ohlcv_5m and len(ohlcv_5m) >= 10:
-                            closes = [c[4] for c in ohlcv_5m]
-                            last_5 = closes[-5:]
-                            downtrend = all(last_5[i] >= last_5[i + 1] for i in range(len(last_5) - 1))
-                            below_ema = (ema20_value is not None and current_price < ema20_value)
-
-                            if downtrend and below_ema:
-                                message = (
-                                    f"🔴 АНАЛИЗ ТРЕНДА | {pair}\n"
-                                    f"Убыток: {price_change_pct:+.2f}%\n"
-                                    f"Нисходящий тренд + цена ниже EMA20\n"
-                                    f"💰 Вложено: ${position.amount_usdt:.2f}\n"
-                                    f"PnL: {'+' if pnl_usd >= 0 else ''}${pnl_usd:.2f}"
-                                )
-                                await self.send_telegram_message(message)
-                                await self.close_position(position_id)
-                                continue
-                    except Exception as e:
-                        logger.warning(f"Ошибка анализа тренда для {pair}: {e}")
+ 
 
                 # Откат от пика
                 if position.peak_pnl >= config.MIN_PEAK_PNL_TO_TRACK:
@@ -1908,8 +1853,7 @@ class SmartMoneyBot:
                     position.trailing_peak = pnl_pct
                     continue
 
-                # Проверка таймаута
-                await self.check_position_timeout(position)
+
 
             except Exception as e:
                 logger.error(f"Ошибка мониторинга {position_id}: {e}")
@@ -2014,6 +1958,9 @@ class SmartMoneyBot:
 
                     await self.open_position(symbol, entry_price, smc_result)
                     await asyncio.sleep(5)
+
+                # Бот отдыхает треть секунды перед следующей монетой
+                await asyncio.sleep(0.3)
 
             self.last_scan_time = datetime.now(timezone.utc)
             logger.info("Сканирование завершено")
