@@ -1018,6 +1018,7 @@ class SmartMoneyBot:
             'apiKey': api_key,
             'secret': api_secret,
             'enableRateLimit': True,
+            'timeout': 30000,  # Ждем ответа от Binance до 30 секунд
             'options': {
                 'defaultType': 'future',
                 'recvWindow': 60000,
