@@ -1,5 +1,38 @@
 
 
+# ===== BINANCE SAFE REQUEST WRAPPER =====
+import asyncio
+import ccxt
+
+async def safe_api_call(func, *args, retries=5, delay=3, **kwargs):
+    last_error = None
+    for attempt in range(retries):
+        try:
+            return await func(*args, **kwargs)
+        except Exception as e:
+            last_error = e
+            err = str(e)
+
+            timeout_errors = [
+                "-1007",
+                "Timeout waiting for response from backend server",
+                "execution status unknown",
+                "RequestTimeout",
+                "NetworkError",
+            ]
+
+            if any(x in err for x in timeout_errors):
+                await asyncio.sleep(delay * (attempt + 1))
+                continue
+
+            raise e
+
+    raise last_error
+
+# =========================================
+
+
+
 # ================= TELEGRAM RETRY =================
 async def safe_telegram_send(send_func, *args, **kwargs):
     import asyncio
