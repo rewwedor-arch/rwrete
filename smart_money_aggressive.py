@@ -541,10 +541,26 @@ class SMCAnalyzer:
         self.exchange = exchange
 
     async def get_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> List[List]:
-        """Получение свечных данных"""
+        """Получение свечных данных с защитой от невалидных символов"""
         try:
+            if not hasattr(self.exchange, 'markets') or not self.exchange.markets:
+                await self.exchange.load_markets()
+
+            if symbol not in self.exchange.markets:
+                futures_symbol = f"{symbol}:USDT"
+                if futures_symbol in self.exchange.markets:
+                    symbol = futures_symbol
+                else:
+                    logger.warning(f"Символ недоступен на Binance Futures: {symbol}")
+                    return []
+
             ohlcv = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+
+            if not ohlcv or len(ohlcv) < 20:
+                return []
+
             return ohlcv
+
         except Exception as e:
             logger.error(f"Ошибка получения OHLCV для {symbol}: {e}")
             return []
@@ -632,6 +648,8 @@ class SMCAnalyzer:
 
         # Smoothed values
         atr = sum(tr[:period]) / period
+        if atr <= 0:
+            return [0]
         plus_di = [(sum(plus_dm[:period]) / atr) * 100]
         minus_di = [(sum(minus_dm[:period]) / atr) * 100]
 
@@ -1051,7 +1069,7 @@ class SmartMoneyBot:
             'STRK/USDT', 'DYDX/USDT', 'GMX/USDT', 'CRV/USDT', 'CHZ/USDT', 
             'SNX/USDT', 'AXS/USDT', 'MKR/USDT', 'THETA/USDT', 'EGLD/USDT', 
             'RUNE/USDT', 'KAS/USDT', 'TON/USDT', 'IMX/USDT', 'MNT/USDT', 
-            'QNT/USDT', 'FLOKI/USDT', 'BOME/USDT', 'MEME/USDT', 'ALT/USDT'
+            'QNT/USDT'
         ]
 
         # Статус бота
@@ -1654,12 +1672,12 @@ class SmartMoneyBot:
         if position.side == 'SHORT':
             price_change_pct = (
                 (position.entry_price - current_price)
-                / position.entry_price
+                / max(position.entry_price, 0.0000001)
             ) * 100.0
         else:
             price_change_pct = (
                 (current_price - position.entry_price)
-                / position.entry_price
+                / max(position.entry_price, 0.0000001)
             ) * 100.0
 
         return price_change_pct * position.leverage
@@ -1751,12 +1769,12 @@ class SmartMoneyBot:
                 if position.side == 'SHORT':
                     price_change_pct = (
                         (position.entry_price - current_price)
-                        / position.entry_price
+                        / max(position.entry_price, 0.0000001)
                     ) * 100
                 else:
                     price_change_pct = (
                         (current_price - position.entry_price)
-                        / position.entry_price
+                        / max(position.entry_price, 0.0000001)
                     ) * 100
                 if position.side == 'SHORT':
                     pnl_usd = position.realized_pnl_usd + (position.entry_price - current_price) * position.remaining_quantity
