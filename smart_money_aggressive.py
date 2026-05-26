@@ -1,3 +1,16 @@
+
+def htf_trend_filter(price: float, ema200: float, side: str) -> bool:
+    """
+    Фильтр тренда:
+    LONG только выше EMA200
+    SHORT только ниже EMA200
+    """
+    if side == "LONG":
+        return price > ema200
+    if side == "SHORT":
+        return price < ema200
+    return False
+
 #!/usr/bin/env python3
 """
 Smart Money Aggressive Trading Bot
@@ -66,29 +79,33 @@ class StrategyConfig:
     LEVERAGE: int = 50  # Максимальное плечо для агрессивного разгона
 
     # Риск-менеджмент — ШИРОКИЙ КОРИДОР для высоковолатильных альтов
-    STOP_LOSS_PCT: float = 0.8  # Быстрый стоп для защиты депозита
-    TAKE_PROFIT_PCT: float = 1.0  
+    STOP_LOSS_PCT: float = 0.9  # Быстрый стоп для защиты депозита
+    TAKE_PROFIT_PCT: float = 2.2  
     TAKE_PROFIT: float = TAKE_PROFIT_PCT  
-    TP2_PCT: float = 2.0  
-    TP3_PCT: float = 4.0  
+    TP2_PCT: float = 4.0  
+    TP3_PCT: float = 7.0  
 
     # Цели
     DAILY_TARGET_MIN: float = 10.0  # Минимальная цель в день %
     DAILY_TARGET_MAX: float = 15.0  # Максимальная цель в день %
-    MAX_DAILY_LOSS_PCT: float = 15.0  # Стоп торговли при дневной просадке
+    MAX_DAILY_LOSS_PCT: float = 10.0  # Стоп торговли при дневной просадке
 
     # Режим работы
     WORK_HOURS: str = "24/7"
     DIRECTION: str = "BOTH"  # LONG и SHORT
 
     # Параметры сигналов — КЛАССИЧЕСКИЕ 7 ИНДИКАТОРОВ
-    MIN_INDICATORS_SCORE: int = 3  # Минимум 4 из 7
+    MIN_INDICATORS_SCORE: int = 5  # Минимум 4 из 7
     TOTAL_INDICATORS: int = 8
 
     # Таймфреймы
     SCANNER_TIMEFRAME: str = '5m'
     TREND_TIMEFRAME: str = '15m'
     EMA_TIMEFRAME: str = '1h'
+    # HTF Trend Filter
+    USE_HTF_TREND_FILTER: bool = True
+    HTF_EMA_PERIOD: int = 200
+
 
     # Алёрты по прибыли (в % ROE с учётом плеча)
     PROFIT_ALERT_10: float = 50.0    # +50% ROE
@@ -99,7 +116,7 @@ class StrategyConfig:
     # Momentum exit — закрытие слабых зависших сделок
     MOMENTUM_EXIT_MINUTES: int = 40
     MOMENTUM_MIN_PROFIT: float = 0.3
-    MOMENTUM_MIN_ADX: float = 18.0
+    MOMENTUM_MIN_ADX: float = 23.0
 
     # ===================================================================
     # ПОРТФЕЛЬНАЯ СТРАТЕГИЯ
