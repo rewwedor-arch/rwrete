@@ -110,7 +110,7 @@ class StrategyConfig:
 
     # Таймфреймы
     SCANNER_TIMEFRAME: str = '5m'
-    TREND_TIMEFRAME: str = '15m'
+    TREND_TIMEFRAME: str = '1h'
     EMA_TIMEFRAME: str = '1h'
     USE_HTF_TREND_FILTER: bool = True
     HTF_EMA_PERIOD: int = 200
@@ -879,7 +879,7 @@ class SMCAnalyzer:
 
             has_smc_structure = bool(fvg) or bool(ob)
 
-            # 3. EMA 50
+            # 3. EMA 50 (Определяем локальный тренд)
             ema50 = self.calculate_ema(closes_5m, 50)
             if ema50:
                 result['ema200'] = ema50[-1]
@@ -890,29 +890,37 @@ class SMCAnalyzer:
                     short_score += 1
                     short_ind['ema50_trend'] = True
 
-            # 4. RSI
+            # 4. RSI (Не покупаем на хаях, не продаем на лоях)
             rsi = self.calculate_rsi(closes_5m, 14)
             if rsi and len(rsi) >= 2:
                 result['rsi'] = rsi[-1]
-                if 40 <= rsi[-1] <= 80 and rsi[-1] > rsi[-2]:
+                # Не покупаем, если RSI выше 65 (уже перегрето)
+                if 45 <= rsi[-1] <= 65 and rsi[-1] > rsi[-2]:
                     long_score += 1
                     long_ind['rsi_momentum'] = True
-                if 20 <= rsi[-1] <= 60 and rsi[-1] < rsi[-2]:
+                # Не шортим, если RSI ниже 35 (уже перепродано)
+                if 35 <= rsi[-1] <= 55 and rsi[-1] < rsi[-2]:
                     short_score += 1
                     short_ind['rsi_momentum'] = True
 
-            # 5. ADX >= 30 (нейтральный)
-            # FIX #3: calculate_adx теперь не выбрасывает IndexError
+            # 5. ADX (ЖЕСТКИЙ ФИЛЬТР ФЛЭТА)
             adx = self.calculate_adx(highs_5m, lows_5m, closes_5m, 14)
             if adx:
                 result['adx'] = adx[-1]
-                if adx[-1] >= 30:
-                    long_score += 1
-                    short_score += 1
-                    long_ind['adx'] = True
-                    short_ind['adx'] = True
+                if adx[-1] < 20:
+                    # Если тренда нет вообще - сразу убиваем анализ
+                    logger.info(f"Пропуск {symbol}: Рынок во флэте (ADX = {adx[-1]:.1f})")
+                    return result
+                elif adx[-1] >= 25:
+                    # Балл даем ТОЛЬКО в сторону локального тренда EMA50
+                    if ema50 and current_price > ema50[-1]:
+                        long_score += 1
+                        long_ind['adx'] = True
+                    elif ema50 and current_price < ema50[-1]:
+                        short_score += 1
+                        short_ind['adx'] = True
 
-            # 6. MACD
+            # 6. MACD (Без изменений, тут все ок)
             macd = self.calculate_macd(closes_5m)
             result['macd'] = macd
             if macd['histogram'] > 0 and macd['macd'] > macd['signal']:
@@ -922,17 +930,18 @@ class SMCAnalyzer:
                 short_score += 1
                 short_ind['macd'] = True
 
-            # 7. Объём
+            # 7. Объём (Балл ТОЛЬКО в сторону текущей свечи)
             vol_sma = self.calculate_sma(volumes_5m, 20)
             if vol_sma and vol_sma[-1] > 0:
                 vol_ratio = volumes_5m[-1] / vol_sma[-1]
-                if vol_ratio > 1.3:
-                    long_score += 1
-                    short_score += 1
+                if vol_ratio > 1.5:  # Усилили требование: объем должен быть выше нормы на 50%
                     result['volume_ok'] = True
-                    long_ind['volume_spike'] = True
-                    short_ind['volume_spike'] = True
-
+                    if closes_5m[-1] > closes_5m[-2]: # Растущая свеча
+                        long_score += 1
+                        long_ind['volume_spike'] = True
+                    elif closes_5m[-1] < closes_5m[-2]: # Падающая свеча
+                        short_score += 1
+                        short_ind['volume_spike'] = True
             # Выбираем лучшее направление
                         # Получаем EMA200 с таймфрейма 15m для фильтра тренда
             ema200_15m = self.calculate_ema([c[4] for c in ohlcv_15m], 200)
