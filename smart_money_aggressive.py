@@ -1732,11 +1732,6 @@ class SmartMoneyBot:
 
                 pnl_pct = self.calculate_position_roe(position, current_price)
 
-                # Автоматический перевод в безубыток
-                if pnl_pct >= 0.8 and position.dynamic_sl_level == 0:
-                    position.stop_loss = position.entry_price
-                    position.dynamic_sl_level = 1
-                    logger.info(f"BREAKEVEN ACTIVATED: {position.symbol}")
 
  
 
@@ -1778,23 +1773,6 @@ class SmartMoneyBot:
                     continue
 
  
-
-                # Откат от пика
-                if position.peak_pnl >= config.MIN_PEAK_PNL_TO_TRACK:
-                    drawdown = position.peak_pnl - pnl_pct
-                    if drawdown > config.PEAK_DRAWDOWN_CLOSE_PCT:
-                        message = (
-                            f"📉 ОТКАТ ОТ ПИКА | {pair}\n"
-                            f"Было: +{position.peak_pnl:.1f}%\n"
-                            f"Сейчас: {pnl_pct:+.1f}%\n"
-                            f"Откат: {drawdown:.1f}%\n\n"
-                            f"🚨 АВТОМАТИЧЕСКИЙ ВЫХОД!\n"
-                            f"Фактический ROE: {pnl_pct:+.1f}%\n"
-                            f"PnL: {'+' if pnl_usd >= 0 else ''}${pnl_usd:.2f}"
-                        )
-                        await self.send_telegram_message(message)
-                        await self.close_position(position_id)
-                        continue
 
                 # Trailing Stop
                 if pnl_pct >= config.TRAILING_ACTIVATE_PCT and not position.trailing_active:
