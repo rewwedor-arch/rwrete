@@ -63,10 +63,10 @@ class StrategyConfig:
     # Финансовые параметры
     DEPOSIT: float = 50.0  # Стартовый депозит USDT
     ENTRY_AMOUNT: float = 50.0  # Базовая сумма (используется если REINVEST=False)
-    LEVERAGE: int = 75  # Максимальное плечо для агрессивного разгона
+    LEVERAGE: int = 50  # Максимальное плечо для агрессивного разгона
 
     # Риск-менеджмент — ШИРОКИЙ КОРИДОР для высоковолатильных альтов
-    STOP_LOSS_PCT: float = 0.24  # Быстрый стоп для защиты депозита
+    STOP_LOSS_PCT: float = 0.8  # Быстрый стоп для защиты депозита
     TAKE_PROFIT_PCT: float = 1.0  
     TAKE_PROFIT: float = TAKE_PROFIT_PCT  
     TP2_PCT: float = 2.0  
@@ -75,6 +75,7 @@ class StrategyConfig:
     # Цели
     DAILY_TARGET_MIN: float = 10.0  # Минимальная цель в день %
     DAILY_TARGET_MAX: float = 15.0  # Максимальная цель в день %
+    MAX_DAILY_LOSS_PCT: float = 15.0  # Стоп торговли при дневной просадке
 
     # Режим работы
     WORK_HOURS: str = "24/7"
@@ -111,7 +112,7 @@ class StrategyConfig:
     PEAK_DRAWDOWN_CLOSE_PCT: float = 2.5
 
     # Трейлинг
-    TRAILING_ACTIVATE_PCT: float = 20.0
+    TRAILING_ACTIVATE_PCT: float = 15.0
     TRAILING_DRAWDOWN_CLOSE_PCT: float = 8.0
     TRAILING_DISTANCE_PCT: float = 6.0
     TRAILING_BREAKEVEN_PCT: float = 0.1
@@ -121,9 +122,9 @@ class StrategyConfig:
 
     # Частичные TP (в % ROE)
     PARTIAL_TP_ENABLED = True
-    PARTIAL_TP1_PCT: float = 22.0   # Фиксируем 40%
-    PARTIAL_TP2_PCT: float = 55.0   # Фиксируем 30%
-    PARTIAL_TP3_PCT: float = 90.0  # Фиксируем остаток, оставляем раннер
+    PARTIAL_TP1_PCT: float = 15.0   # Фиксируем 40%
+    PARTIAL_TP2_PCT: float = 35.0   # Фиксируем 30%
+    PARTIAL_TP3_PCT: float = 60.0  # Фиксируем остаток, оставляем раннер
 
     # Время позиции
     POSITION_TIMEOUT_HOURS: float = 1.8
@@ -800,7 +801,7 @@ class SMCAnalyzer:
         2. FVG (Имбаланс) — бычий или медвежий
         3. Тренд по EMA50 — выше или ниже
         4. RSI Momentum — бычий (50-80) или медвежий (20-50 и падает)
-        5. ADX > 20 (Сила тренда) — нейтральный
+        5. ADX >= 30 (Сила тренда) — нейтральный
         6. MACD — бычий или медвежий
         7. Объем (Всплеск > 1.3x) — нейтральный
 
@@ -895,11 +896,11 @@ class SMCAnalyzer:
                     short_score += 1
                     short_ind['rsi_momentum'] = True
 
-            # ═══ 5. ADX > 20 (Сила тренда — нейтральный) ═══
+            # ═══ 5. ADX >= 30 (Сила тренда — нейтральный) ═══
             adx = self.calculate_adx(highs_5m, lows_5m, closes_5m, 14)
             if adx:
                 result['adx'] = adx[-1]
-                if adx[-1] > 20:
+                if adx[-1] >= 30:
                     long_score += 1
                     short_score += 1
                     long_ind['adx'] = True
@@ -1126,6 +1127,18 @@ class SmartMoneyBot:
         min_slot = config.MIN_SLOT_USDT
         raw = int(virtual_equity // min_slot)
         return max(1, raw)
+
+    def is_daily_loss_limit_reached(self) -> bool:
+        """Проверка дневного лимита убытков."""
+        try:
+            stats = self.db.get_daily_statistics()
+            if not stats:
+                return False
+            daily_pct = float(stats.get('total_pnl_pct') or 0.0)
+            return daily_pct <= -abs(config.MAX_DAILY_LOSS_PCT)
+        except Exception:
+            return False
+
     async def calculate_position_size(self, entry_price: float, score: int = 5) -> tuple:
         try:
             stats = self.db.get_all_statistics()
@@ -1151,7 +1164,8 @@ class SmartMoneyBot:
 
             weight = max(score, config.MIN_INDICATORS_SCORE) / 5.0
             amount_usdt = base_slot * weight
-            amount_usdt = min(amount_usdt, free_equity)
+            max_position_cap = virtual_equity * 0.20
+            amount_usdt = min(amount_usdt, free_equity, max_position_cap)
             if amount_usdt < config.MIN_SLOT_USDT:
                 if free_equity >= config.MIN_SLOT_USDT:
                     amount_usdt = config.MIN_SLOT_USDT
@@ -1174,6 +1188,10 @@ class SmartMoneyBot:
         global ALLOW_TRADING
         if not ALLOW_TRADING:
             logger.info(f"Сигнал {symbol} пойман, но торговля приостановлена (новостной фон)")
+            return None
+
+        if self.is_daily_loss_limit_reached():
+            logger.warning(f"Достигнут дневной лимит убытков {config.MAX_DAILY_LOSS_PCT}% — новые сделки заблокированы")
             return None
         try:
             direction = smc_result.get('direction', 'LONG')
