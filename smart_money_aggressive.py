@@ -81,7 +81,7 @@ Smart Money Aggressive Trading Bot
 
 import asyncio
 import logging
-import sqlite3
+# sqlite removed
 import os
 import sys
 import threading
@@ -266,7 +266,7 @@ class Database:
 
     def init_db(self):
         """Инициализация таблиц БД"""
-        conn = sqlite3.connect(self.db_path)
+        conn = None
         cursor = conn.cursor()
 
         # Таблица позиций
@@ -357,7 +357,7 @@ class Database:
                      quantity: float, smc_score: int, bos_info: str,
                      fvg_detected: bool, rsi_value: float, adx_value: float) -> int:
         """Добавление новой позиции"""
-        conn = sqlite3.connect(self.db_path)
+        conn = None
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -377,7 +377,7 @@ class Database:
     def update_position(self, position_id: int, close_price: float, 
                         pnl: float, pnl_pct: float, status: str = 'CLOSED'):
         """Обновление позиции при закрытии"""
-        conn = sqlite3.connect(self.db_path)
+        conn = None
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -392,7 +392,7 @@ class Database:
 
     def get_open_positions(self) -> List[Dict]:
         """Получение всех открытых позиций"""
-        conn = sqlite3.connect(self.db_path)
+        conn = None
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -407,7 +407,7 @@ class Database:
     def add_signal(self, symbol: str, signal_type: str, entry_price: float,
                    smc_score: int, indicators: dict) -> int:
         """Добавление сигнала"""
-        conn = sqlite3.connect(self.db_path)
+        conn = None
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -422,7 +422,7 @@ class Database:
 
     def mark_signal_executed(self, signal_id: int):
         """Отметка выполненного сигнала"""
-        conn = sqlite3.connect(self.db_path)
+        conn = None
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -444,7 +444,7 @@ class Database:
         total_pnl_pct — это результат дня в процентах от equity_reference (задайте DEPOSIT в .env),
         а не сумма «процентов по сделкам» (раньше так было — отчёт выглядел неправдоподобно).
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = None
         cursor = conn.cursor()
         today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
         ref = float(equity_reference) if equity_reference and equity_reference > 0 else 140.0
@@ -516,7 +516,7 @@ class Database:
         if not date:
             date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
-        conn = sqlite3.connect(self.db_path)
+        conn = None
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -528,7 +528,7 @@ class Database:
 
     def add_alert(self, position_id: int, alert_type: str, message: str):
         """Добавление алёрта"""
-        conn = sqlite3.connect(self.db_path)
+        conn = None
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -541,7 +541,7 @@ class Database:
 
     def get_all_statistics(self) -> Dict:
         """Получение общей статистики"""
-        conn = sqlite3.connect(self.db_path)
+        conn = None
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -579,7 +579,7 @@ class Database:
 
     def get_statistics_by_hours(self, hours: int) -> Dict:
         """Получение статистики за последние N часов"""
-        conn = sqlite3.connect(self.db_path)
+        conn = None
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -1107,20 +1107,20 @@ class SmartMoneyBot:
         # Активные позиции
         self.positions: Dict[int, Position] = {}
 
-        # Список символов для сканирования (формат USDT-M futures для ccxt)
+        # Список символов для сканирования
         self.symbols_to_scan = [
-            'BTC/USDT:USDT', 'ETH/USDT:USDT', 'BNB/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT',
-            'ADA/USDT:USDT', 'AVAX/USDT:USDT', 'DOGE/USDT:USDT', 'DOT/USDT:USDT', 'LINK/USDT:USDT',
-            'POL/USDT:USDT', 'UNI/USDT:USDT', 'ATOM/USDT:USDT', 'LTC/USDT:USDT', 'ETC/USDT:USDT',
-            'NEAR/USDT:USDT', 'FIL/USDT:USDT', 'AAVE/USDT:USDT', 'ARB/USDT:USDT', 'OP/USDT:USDT',
-            'VANA/USDT:USDT', 'APT/USDT:USDT', 'INJ/USDT:USDT', 'RNDR/USDT:USDT', 'SUI/USDT:USDT',
-            'SEI/USDT:USDT', 'TIA/USDT:USDT', 'ORDI/USDT:USDT', 'WLD/USDT:USDT', 'GALA/USDT:USDT', 
-            'FET/USDT:USDT', 'STX/USDT:USDT', 'LDO/USDT:USDT', 'GRT/USDT:USDT', 'SAND/USDT:USDT', 
-            'MANA/USDT:USDT', 'FTM/USDT:USDT', 'WIF/USDT:USDT', 'JUP/USDT:USDT', 'PYTH/USDT:USDT', 
-            'STRK/USDT:USDT', 'DYDX/USDT:USDT', 'GMX/USDT:USDT', 'CRV/USDT:USDT', 'CHZ/USDT:USDT', 
-            'SNX/USDT:USDT', 'AXS/USDT:USDT', 'MKR/USDT:USDT', 'THETA/USDT:USDT', 'EGLD/USDT:USDT', 
-            'RUNE/USDT:USDT', 'KAS/USDT:USDT', 'TON/USDT:USDT', 'IMX/USDT:USDT', 'MNT/USDT:USDT', 
-            'QNT/USDT:USDT', 'FLOKI/USDT:USDT', 'BOME/USDT:USDT', 'MEME/USDT:USDT', 'ALT/USDT:USDT'
+            'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT',
+            'ADA/USDT', 'AVAX/USDT', 'DOGE/USDT', 'DOT/USDT', 'LINK/USDT',
+            'POL/USDT', 'UNI/USDT', 'ATOM/USDT', 'LTC/USDT', 'ETC/USDT',
+            'NEAR/USDT', 'FIL/USDT', 'AAVE/USDT', 'ARB/USDT', 'OP/USDT',
+            'VANA/USDT', 'APT/USDT', 'INJ/USDT', 'RNDR/USDT', 'SUI/USDT',
+            'SEI/USDT', 'TIA/USDT', 'ORDI/USDT', 'WLD/USDT', 'GALA/USDT', 
+            'FET/USDT', 'STX/USDT', 'LDO/USDT', 'GRT/USDT', 'SAND/USDT', 
+            'MANA/USDT', 'FTM/USDT', 'WIF/USDT', 'JUP/USDT', 'PYTH/USDT', 
+            'STRK/USDT', 'DYDX/USDT', 'GMX/USDT', 'CRV/USDT', 'CHZ/USDT', 
+            'SNX/USDT', 'AXS/USDT', 'MKR/USDT', 'THETA/USDT', 'EGLD/USDT', 
+            'RUNE/USDT', 'KAS/USDT', 'TON/USDT', 'IMX/USDT', 'MNT/USDT', 
+            'QNT/USDT', 'FLOKI/USDT', 'BOME/USDT', 'MEME/USDT', 'ALT/USDT'
         ]
 
         # Статус бота
@@ -1167,10 +1167,14 @@ class SmartMoneyBot:
                 err_str = str(balance_error)
                 if '-2015' in err_str:
                     logger.error(
-                        "❌ API ключ НЕ ИМЕЕТ ПРАВ на USDT-M Futures!\n"
-                        "   Что проверить на Binance:\n"
-                        "   1. API Management → ваш ключ → Включить «Enable Futures» / «USDT-M Futures»\n"
-                        "   2. Убедитесь, что IP адрес в whitelist (если включён)\n"
+                        "❌ API ключ НЕ ИМЕЕТ ПРАВ на USDT-M Futures!
+"
+                        "   Что проверить на Binance:
+"
+                        "   1. API Management → ваш ключ → Включить «Enable Futures» / «USDT-M Futures»
+"
+                        "   2. Убедитесь, что IP адрес в whitelist (если включён)
+"
                         "   3. Должны быть права «Чтение» и «Futures»"
                     )
                     raise balance_error
