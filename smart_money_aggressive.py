@@ -1,17 +1,3 @@
-def htf_trend_filter(price: float, ema200: float, side: str) -> bool:
-    """
-    Фильтр тренда:
-    LONG только выше EMA200
-    SHORT только ниже EMA200
-    """
-    if side == "LONG":
-        return price > ema200
-    if side == "SHORT":
-        return price < ema200
-    return False
-
-
-#!/usr/bin/env python3
 """
 Smart Money Aggressive Trading Bot
 Точная копия стратегии SMART MONEY 1
@@ -91,8 +77,8 @@ class StrategyConfig:
     LEVERAGE: int = 50
 
     # Риск-менеджмент
-    STOP_LOSS_PCT: float = 0.9
-    TAKE_PROFIT_PCT: float = 2.2
+    STOP_LOSS_PCT: float = 0.75
+    TAKE_PROFIT_PCT: float = 2.5
     TAKE_PROFIT: float = 2.2
     TP2_PCT: float = 4.0
     TP3_PCT: float = 7.0
@@ -104,7 +90,7 @@ class StrategyConfig:
 
     # --- FIX #4: жёсткие лимиты безопасности ---
     # Максимальное число одновременных позиций
-    MAX_CONCURRENT_POSITIONS: int = 2
+    MAX_CONCURRENT_POSITIONS: int = 4
     # Стоп торгов при достижении дневной просадки (% от депозита)
     MAX_SESSION_LOSS_PCT: float = 30.0
     # Минимальный процент заполнения ордера, иначе — отмена (partial fill)
@@ -149,17 +135,17 @@ class StrategyConfig:
     PEAK_DRAWDOWN_CLOSE_PCT: float = 2.5
 
     # Трейлинг
-    TRAILING_ACTIVATE_PCT: float = 15.0
-    TRAILING_DRAWDOWN_CLOSE_PCT: float = 8.0
+    TRAILING_ACTIVATE_PCT: float = 35.0
+    TRAILING_DRAWDOWN_CLOSE_PCT: float = 15.0
     TRAILING_DISTANCE_PCT: float = 6.0
     TRAILING_BREAKEVEN_PCT: float = 0.1
     MAX_POSITION_LOSS_PCT: float = -22.0
 
     # Частичные TP (в % ROE)
     PARTIAL_TP_ENABLED: bool = True
-    PARTIAL_TP1_PCT: float = 15.0
-    PARTIAL_TP2_PCT: float = 35.0
-    PARTIAL_TP3_PCT: float = 60.0
+    PARTIAL_TP1_PCT: float = 30.0
+    PARTIAL_TP2_PCT: float = 65.0
+    PARTIAL_TP3_PCT: float = 120.0
 
     # Время позиции
     POSITION_TIMEOUT_HOURS: float = 1.8
@@ -547,6 +533,17 @@ class SMCAnalyzer:
     def __init__(self, exchange: ccxt.binanceusdm):
         self.exchange = exchange
 
+    def calculate_atr(self, highs: List[float], lows: List[float], closes: List[float], period: int = 14) -> float:
+        """Расчет ATR для динамических стопов и тейков"""
+        if len(closes) < period + 1:
+            return 0.0
+        tr = []
+        for i in range(1, len(closes)):
+            tr1 = highs[i] - lows[i]
+            tr2 = abs(highs[i] - closes[i - 1])
+            tr3 = abs(lows[i] - closes[i - 1])
+            tr.append(max(tr1, tr2, tr3))
+        return sum(tr[-period:]) / period
     async def get_ohlcv(self, symbol: str, timeframe: str, limit: int = 100) -> List[List]:
         """Получение свечных данных"""
         try:
@@ -843,7 +840,9 @@ class SMCAnalyzer:
             lows_5m = [l[3] for l in ohlcv_5m]
             volumes_5m = [v[5] for v in ohlcv_5m]
             current_price = closes_5m[-1]
-
+            # Считаем текущую волатильность (ATR)
+            atr_val = self.calculate_atr(highs_5m, lows_5m, closes_5m, 14)
+            result['atr'] = atr_val
             long_score = 0
             short_score = 0
             long_ind = {}
@@ -935,16 +934,27 @@ class SMCAnalyzer:
                     short_ind['volume_spike'] = True
 
             # Выбираем лучшее направление
+                        # Получаем EMA200 с таймфрейма 15m для фильтра тренда
+            ema200_15m = self.calculate_ema([c[4] for c in ohlcv_15m], 200)
+            ema200_val = ema200_15m[-1] if ema200_15m else current_price
+
+            # Выбираем лучшее направление со строгим фильтром по HTF тренду
             if long_score >= short_score and long_score >= config.MIN_INDICATORS_SCORE and has_smc_structure:
-                result['score'] = long_score
-                result['direction'] = 'LONG'
-                result['indicators'] = long_ind
-                result['signal'] = True
+                if config.USE_HTF_TREND_FILTER and current_price < ema200_val:
+                    logger.info(f"Пропуск LONG {symbol}: цена ниже EMA200 на 15m")
+                else:
+                    result['score'] = long_score
+                    result['direction'] = 'LONG'
+                    result['indicators'] = long_ind
+                    result['signal'] = True
             elif short_score > long_score and short_score >= config.MIN_INDICATORS_SCORE and has_smc_structure:
-                result['score'] = short_score
-                result['direction'] = 'SHORT'
-                result['indicators'] = short_ind
-                result['signal'] = True
+                if config.USE_HTF_TREND_FILTER and current_price > ema200_val:
+                    logger.info(f"Пропуск SHORT {symbol}: цена выше EMA200 на 15m")
+                else:
+                    result['score'] = short_score
+                    result['direction'] = 'SHORT'
+                    result['indicators'] = short_ind
+                    result['signal'] = True
             else:
                 if long_score >= short_score:
                     result['score'] = long_score
@@ -1333,29 +1343,31 @@ class SmartMoneyBot:
                 f"est_fee=${estimated_fee:.4f}"
             )
 
-            # FIX #1: SL/TP рассчитываем от РЕАЛЬНОГО actual_entry (не ожидаемого)
-            if direction == 'SHORT':
-                actual_sl = float(self.exchange.price_to_precision(
-                    symbol, actual_entry * (1 + config.STOP_LOSS_PCT / 100)
-                ))
-                actual_tp = float(self.exchange.price_to_precision(
-                    symbol, actual_entry * (1 - config.TP3_PCT / 100)
-                ))
-                close_side = 'BUY'
-                tp1_price = float(self.exchange.price_to_precision(
-                    symbol, actual_entry * (1 - config.TAKE_PROFIT_PCT / 100)
-                ))
+            # --- УМНЫЕ ДИНАМИЧЕСКИЕ ЦЕЛИ ПО ГРАФИКУ (ATR) ---
+            atr = smc_result.get('atr', 0)
+            
+            # Если ATR посчитался, используем его. Если нет - берем дефолтный процент как страховку.
+            # Настройки RR (Risk Reward): Стоп = 1.5 ATR, TP1 = 1.5 ATR, TP3 = 4 ATR
+            if atr > 0:
+                sl_dist = atr * 1.5
+                tp1_dist = atr * 1.5 
+                tp3_dist = atr * 4.0
             else:
-                actual_sl = float(self.exchange.price_to_precision(
-                    symbol, actual_entry * (1 - config.STOP_LOSS_PCT / 100)
-                ))
-                actual_tp = float(self.exchange.price_to_precision(
-                    symbol, actual_entry * (1 + config.TP3_PCT / 100)
-                ))
+                sl_dist = actual_entry * (config.STOP_LOSS_PCT / 100)
+                tp1_dist = actual_entry * (config.TAKE_PROFIT_PCT / 100)
+                tp3_dist = actual_entry * (config.TP3_PCT / 100)
+
+            if direction == 'SHORT':
+                actual_sl = float(self.exchange.price_to_precision(symbol, actual_entry + sl_dist))
+                actual_tp = float(self.exchange.price_to_precision(symbol, actual_entry - tp3_dist))
+                close_side = 'BUY'
+                tp1_price = float(self.exchange.price_to_precision(symbol, actual_entry - tp1_dist))
+            else:
+                actual_sl = float(self.exchange.price_to_precision(symbol, actual_entry - sl_dist))
+                actual_tp = float(self.exchange.price_to_precision(symbol, actual_entry + tp3_dist))
                 close_side = 'SELL'
-                tp1_price = float(self.exchange.price_to_precision(
-                    symbol, actual_entry * (1 + config.TAKE_PROFIT_PCT / 100)
-                ))
+                tp1_price = float(self.exchange.price_to_precision(symbol, actual_entry + tp1_dist))
+                
 
             # Выставляем SL
             try:
