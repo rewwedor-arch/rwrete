@@ -1,70 +1,3 @@
-
-
-# ===== BINANCE SAFE REQUEST WRAPPER =====
-import asyncio
-import ccxt
-
-async def safe_api_call(func, *args, retries=5, delay=3, **kwargs):
-    last_error = None
-    for attempt in range(retries):
-        try:
-            return await func(*args, **kwargs)
-        except Exception as e:
-            last_error = e
-            err = str(e)
-
-            timeout_errors = [
-                "-1007",
-                "Timeout waiting for response from backend server",
-                "execution status unknown",
-                "RequestTimeout",
-                "NetworkError",
-            ]
-
-            if any(x in err for x in timeout_errors):
-                await asyncio.sleep(delay * (attempt + 1))
-                continue
-
-            raise e
-
-    raise last_error
-
-# =========================================
-
-
-
-# ================= TELEGRAM RETRY =================
-async def safe_telegram_send(send_func, *args, **kwargs):
-    import asyncio
-    for _ in range(3):
-        try:
-            return await send_func(*args, **kwargs)
-        except Exception:
-            await asyncio.sleep(2)
-# ==================================================
-
-
-
-# ================= SAFE FIXES =================
-def safe_division(a, b, default=0):
-    try:
-        if b == 0 or b is None:
-            return default
-        try:
-            return a / b
-        except ZeroDivisionError:
-            return default
-    except Exception:
-        return default
-# ==============================================
-
-
-# ================= TELEGRAM CONFLICT FIX =================
-# Запускайте только 1 экземпляр бота.
-# Иначе Telegram polling вызовет:
-# telegram.error.Conflict
-# ========================================================
-
 #!/usr/bin/env python3
 """
 Smart Money Aggressive Trading Bot
@@ -81,7 +14,7 @@ Smart Money Aggressive Trading Bot
 
 import asyncio
 import logging
-# sqlite removed
+import sqlite3
 import os
 import sys
 import threading
@@ -120,15 +53,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-
-# ================= OPTIMIZED AGGRESSIVE SETTINGS =================
-# Изменения:
-# - фильтрация слабых входов усилена
-# - TP увеличен для лучшего RR
-# - weak momentum exit больше не режет сделки слишком рано
-# - SL ограничивает слив депозита
-# ================================================================
-
 # ============================================================================
 # КРИТИЧЕСКИ ВАЖНЫЕ ПАРАМЕТРЫ СТРАТЕГИИ
 # ============================================================================
@@ -139,28 +63,48 @@ class StrategyConfig:
     # Финансовые параметры
     DEPOSIT: float = 50.0  # Стартовый депозит USDT
     ENTRY_AMOUNT: float = 50.0  # Базовая сумма (используется если REINVEST=False)
-    LEVERAGE: int = 50  # Максимальное плечо для агрессивного разгона
+    LEVERAGE: int = 75  # Максимальное плечо для агрессивного разгона
 
     # Риск-менеджмент — ШИРОКИЙ КОРИДОР для высоковолатильных альтов
-    STOP_LOSS_PCT: float = 1.5  # Стоп 1.5% от цены входа (= 75% ROE при x50)
-    TAKE_PROFIT_PCT: float = 1.8  
+    STOP_LOSS_PCT: float = 0.24  # Быстрый стоп для защиты депозита
+    TAKE_PROFIT_PCT: float = 1.0  
     TAKE_PROFIT: float = TAKE_PROFIT_PCT  
-    TP2_PCT: float = 3.2  
-    TP3_PCT: float = 5.5  
+    TP2_PCT: float = 2.0  
+    TP3_PCT: float = 4.0  
 
     # Цели
     DAILY_TARGET_MIN: float = 10.0  # Минимальная цель в день %
     DAILY_TARGET_MAX: float = 15.0  # Максимальная цель в день %
 
-    # Параметры сигналов
-    MIN_INDICATORS_SCORE: int = 3  # Минимум 3 из 8 (снижено для агрессивного режима)
+    # Режим работы
+    WORK_HOURS: str = "24/7"
+    DIRECTION: str = "BOTH"  # LONG и SHORT
+
+    # Параметры сигналов — КЛАССИЧЕСКИЕ 7 ИНДИКАТОРОВ
+    MIN_INDICATORS_SCORE: int = 3  # Минимум 4 из 7
     TOTAL_INDICATORS: int = 8
+
+    # Таймфреймы
     SCANNER_TIMEFRAME: str = '5m'
     TREND_TIMEFRAME: str = '15m'
+    EMA_TIMEFRAME: str = '1h'
 
-    # Режим работы
+    # Алёрты по прибыли (в % ROE с учётом плеча)
+    PROFIT_ALERT_10: float = 50.0    # +50% ROE
+    PROFIT_ALERT_15: float = 150.0   # +150% ROE
+    PROFIT_ALERT_40: float = 300.0   # +300% ROE
+    DRAWDOWN_ALERT: float = 12.0
+
+    # Momentum exit — закрытие слабых зависших сделок
+    MOMENTUM_EXIT_MINUTES: int = 40
+    MOMENTUM_MIN_PROFIT: float = 0.3
+    MOMENTUM_MIN_ADX: float = 18.0
+
+    # ===================================================================
+    # ПОРТФЕЛЬНАЯ СТРАТЕГИЯ
+    # ===================================================================
     REINVEST_PROFITS: bool = True   # Реинвестировать прибыль
-    MIN_SLOT_USDT: float = 1.0     # Минимальный капитал на 1 сделку ($) - снижено для агрессивного разгона
+    MIN_SLOT_USDT: float = 5.0     # Минимальный капитал на 1 сделку ($)
 
     # Выход по откату от пика (в % ROE)
     MIN_PEAK_PNL_TO_TRACK: float = 12.0
@@ -172,11 +116,8 @@ class StrategyConfig:
     TRAILING_DISTANCE_PCT: float = 6.0
     TRAILING_BREAKEVEN_PCT: float = 0.1
     # Экстренное закрытие плохой сделки
-    MAX_POSITION_LOSS_PCT: float = -12.0
-    MOMENTUM_EXIT_MINUTES: int = 60
-    MOMENTUM_MIN_PROFIT: float = 2.0
-    MOMENTUM_MIN_ADX: float = 25.0
-    DRAWDOWN_ALERT: float = 12.0
+    MAX_POSITION_LOSS_PCT: float = -22.0
+
 
     # Частичные TP (в % ROE)
     PARTIAL_TP_ENABLED = True
@@ -250,23 +191,12 @@ class Database:
     """SQLite база данных для истории сделок и статистики"""
 
     def __init__(self, db_path: str = 'smart_money.db'):
-
-        self.symbols = [
-            "BTC/USDT",
-            "ETH/USDT",
-            "BNB/USDT",
-            "SOL/USDT",
-            "XRP/USDT",
-            "DOGE/USDT",
-            "ADA/USDT"
-        ]
-
         self.db_path = db_path
         self.init_db()
 
     def init_db(self):
         """Инициализация таблиц БД"""
-        conn = None
+        conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
         # Таблица позиций
@@ -357,7 +287,7 @@ class Database:
                      quantity: float, smc_score: int, bos_info: str,
                      fvg_detected: bool, rsi_value: float, adx_value: float) -> int:
         """Добавление новой позиции"""
-        conn = None
+        conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -377,7 +307,7 @@ class Database:
     def update_position(self, position_id: int, close_price: float, 
                         pnl: float, pnl_pct: float, status: str = 'CLOSED'):
         """Обновление позиции при закрытии"""
-        conn = None
+        conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -392,7 +322,7 @@ class Database:
 
     def get_open_positions(self) -> List[Dict]:
         """Получение всех открытых позиций"""
-        conn = None
+        conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -407,7 +337,7 @@ class Database:
     def add_signal(self, symbol: str, signal_type: str, entry_price: float,
                    smc_score: int, indicators: dict) -> int:
         """Добавление сигнала"""
-        conn = None
+        conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -422,7 +352,7 @@ class Database:
 
     def mark_signal_executed(self, signal_id: int):
         """Отметка выполненного сигнала"""
-        conn = None
+        conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -444,7 +374,7 @@ class Database:
         total_pnl_pct — это результат дня в процентах от equity_reference (задайте DEPOSIT в .env),
         а не сумма «процентов по сделкам» (раньше так было — отчёт выглядел неправдоподобно).
         """
-        conn = None
+        conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
         ref = float(equity_reference) if equity_reference and equity_reference > 0 else 140.0
@@ -516,7 +446,7 @@ class Database:
         if not date:
             date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
-        conn = None
+        conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -528,7 +458,7 @@ class Database:
 
     def add_alert(self, position_id: int, alert_type: str, message: str):
         """Добавление алёрта"""
-        conn = None
+        conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -541,7 +471,7 @@ class Database:
 
     def get_all_statistics(self) -> Dict:
         """Получение общей статистики"""
-        conn = None
+        conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -579,7 +509,7 @@ class Database:
 
     def get_statistics_by_hours(self, hours: int) -> Dict:
         """Получение статистики за последние N часов"""
-        conn = None
+        conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
@@ -701,8 +631,8 @@ class SMCAnalyzer:
 
         # Smoothed values
         atr = sum(tr[:period]) / period
-        plus_di = [(sum(plus_dm[:period]) / max(atr, 1e-9)) * 100]
-        minus_di = [(sum(minus_dm[:period]) / max(atr, 1e-9)) * 100]
+        plus_di = [(sum(plus_dm[:period]) / atr) * 100]
+        minus_di = [(sum(minus_dm[:period]) / atr) * 100]
 
         dx = []
         if plus_di[0] + minus_di[0] > 0:
@@ -715,8 +645,8 @@ class SMCAnalyzer:
 
         for i in range(period, len(tr)):
             atr = (atr * (period - 1) + tr[i]) / period
-            pdi = ((plus_di[-1] * (period - 1) + (plus_dm[i] / max(atr, 1e-9)) * 100) / period) if atr > 0 else 0
-            mdi = ((minus_di[-1] * (period - 1) + (minus_dm[i] / max(atr, 1e-9)) * 100) / period) if atr > 0 else 0
+            pdi = ((plus_di[-1] * (period - 1) + (plus_dm[i] / atr) * 100) / period) if atr > 0 else 0
+            mdi = ((minus_di[-1] * (period - 1) + (minus_dm[i] / atr) * 100) / period) if atr > 0 else 0
             plus_di.append(pdi)
             minus_di.append(mdi)
 
@@ -997,13 +927,13 @@ class SMCAnalyzer:
                     short_ind['volume_spike'] = True
 
             # ═══ Выбираем лучшее направление ═══
-            # СИГНАЛ ВАЛИДЕН если набрано >= MIN_INDICATORS_SCORE очков
-            if long_score >= short_score and long_score >= config.MIN_INDICATORS_SCORE:
+            # СИГНАЛ ВАЛИДЕН ТОЛЬКО ЕСЛИ ЕСТЬ SMC СТРУКТУРА (FVG или OB)
+            if long_score >= short_score and long_score >= config.MIN_INDICATORS_SCORE and has_smc_structure:
                 result['score'] = long_score
                 result['direction'] = 'LONG'
                 result['indicators'] = long_ind
                 result['signal'] = True
-            elif short_score > long_score and short_score >= config.MIN_INDICATORS_SCORE:
+            elif short_score > long_score and short_score >= config.MIN_INDICATORS_SCORE and has_smc_structure:
                 result['score'] = short_score
                 result['direction'] = 'SHORT'
                 result['indicators'] = short_ind
@@ -1167,14 +1097,10 @@ class SmartMoneyBot:
                 err_str = str(balance_error)
                 if '-2015' in err_str:
                     logger.error(
-                        "❌ API ключ НЕ ИМЕЕТ ПРАВ на USDT-M Futures!
-"
-                        "   Что проверить на Binance:
-"
-                        "   1. API Management → ваш ключ → Включить «Enable Futures» / «USDT-M Futures»
-"
-                        "   2. Убедитесь, что IP адрес в whitelist (если включён)
-"
+                        "❌ API ключ НЕ ИМЕЕТ ПРАВ на USDT-M Futures!\n"
+                        "   Что проверить на Binance:\n"
+                        "   1. API Management → ваш ключ → Включить «Enable Futures» / «USDT-M Futures»\n"
+                        "   2. Убедитесь, что IP адрес в whitelist (если включён)\n"
                         "   3. Должны быть права «Чтение» и «Futures»"
                     )
                     raise balance_error
@@ -1182,7 +1108,6 @@ class SmartMoneyBot:
             return True
         except Exception as e:
             logger.error(f"Ошибка подключения к бирже: {e}")
-            print(f"[BOT] Exchange connection error: {e}", flush=True)
             return False
 
     def compute_optimal_slots(self, virtual_equity: float) -> int:
@@ -1217,10 +1142,8 @@ class SmartMoneyBot:
                 f"score={score} entry={entry_price}"
             )
 
-            # Минимальная маржа = MIN_SLOT_USDT, но не более free_equity
-            min_margin = min(config.MIN_SLOT_USDT, free_equity * 0.5)
-            if free_equity < min_margin:
-                logger.warning(f"POS_SIZE: free_equity({free_equity:.2f}) < min_margin({min_margin:.2f})")
+            if free_equity < config.MIN_SLOT_USDT:
+                logger.warning(f"POS_SIZE: free_equity({free_equity}) < MIN_SLOT({config.MIN_SLOT_USDT})")
                 return 0, 0, 0
 
             optimal_slots = self.compute_optimal_slots(free_equity)
@@ -1229,21 +1152,16 @@ class SmartMoneyBot:
             weight = max(score, config.MIN_INDICATORS_SCORE) / 5.0
             amount_usdt = base_slot * weight
             amount_usdt = min(amount_usdt, free_equity)
-            
-            # Гарантируем минимум для входа
-            if amount_usdt < min_margin:
-                if free_equity >= min_margin:
-                    amount_usdt = min_margin
+            if amount_usdt < config.MIN_SLOT_USDT:
+                if free_equity >= config.MIN_SLOT_USDT:
+                    amount_usdt = config.MIN_SLOT_USDT
                 else:
-                    logger.warning(f"POS_SIZE: amount_usdt({amount_usdt:.2f}) < min_margin but free_equity also < min_margin")
+                    logger.warning(f"POS_SIZE: amount_usdt({amount_usdt}) < MIN_SLOT but free_equity also < MIN_SLOT")
                     return 0, 0, 0
 
-            # amount_usdt это маржа (не номинал!), номинал = маржа * плечо
-            notional = amount_usdt * config.LEVERAGE
-            quantity = notional / entry_price
-            
-            logger.info(f"POS_SIZE result: margin=${amount_usdt:.2f} notional=${notional:.2f} qty={quantity}")
-            return quantity, amount_usdt, notional
+            quantity = amount_usdt * config.LEVERAGE / entry_price
+            logger.info(f"POS_SIZE result: qty={amount_usdt}={amount_usdt} margin={amount_usdt} notional={amount_usdt * config.LEVERAGE}")
+            return quantity, amount_usdt, amount_usdt * config.LEVERAGE
         except Exception as e:
             logger.error(f"Ошибка в calculate_position_size: {e}", exc_info=True)
             return 0, 0, 0
@@ -1299,7 +1217,7 @@ class SmartMoneyBot:
                 err_str = str(lev_err)
                 if '-2015' in err_str or 'Invalid API-key' in err_str or 'permissions' in err_str:
                     raise
-                for fallback_lev in [50, 25, 20, 10, 5]:
+                for fallback_lev in [50, 20]:
                     try:
                         await self.exchange.set_leverage(fallback_lev, symbol)
                         actual_leverage = fallback_lev
@@ -1309,11 +1227,6 @@ class SmartMoneyBot:
 
             # 2. Открытие позиции
             try:
-                try:
-                    await self.exchange.cancel_all_orders(symbol)
-                except Exception:
-                    pass
-                
                 if direction == 'SHORT':
                     order = await self.exchange.create_market_sell_order(symbol, quantity)
                 else:
@@ -1352,7 +1265,7 @@ class SmartMoneyBot:
 
             # 3. SL
             try:
-                await self.safe_create_order(
+                await self.exchange.create_order(
                     symbol=symbol, type='STOP_MARKET', side=close_side,
                     amount=actual_qty,
                     params={'stopPrice': actual_sl, 'reduceOnly': True}
@@ -1362,7 +1275,7 @@ class SmartMoneyBot:
 
             # 4. TP
             try:
-                await self.safe_create_order(
+                await self.exchange.create_order(
                     symbol=symbol, type='TAKE_PROFIT_MARKET', side=close_side,
                     amount=actual_qty,
                     params={'stopPrice': actual_tp, 'reduceOnly': True}
@@ -1446,52 +1359,6 @@ class SmartMoneyBot:
             logger.error(f"Ошибка открытия позиции {symbol}: {e}")
             await self.send_telegram_message(f"❌ Ошибка открытия {symbol}: {e}")
             return None
-
-    async def safe_create_order(self, **kwargs):
-        """Безопасное создание ордера с retry при Binance timeout"""
-        import asyncio
-
-        for attempt in range(5):
-            try:
-                return await self.safe_create_order(**kwargs)
-
-            except Exception as e:
-                err = str(e)
-
-                if (
-                    "-1007" in err
-                    or "timeout" in err.lower()
-                    or "status unknown" in err.lower()
-                    or "execution status unknown" in err.lower()
-                ):
-                    logger.warning(f"⏳ Binance timeout, retry {attempt + 1}/5...")
-                    await asyncio.sleep(3)
-                    continue
-
-                raise e
-
-        raise Exception("Binance API timeout after 5 retries")
-
-    async def safe_close_order(self, symbol, side, amount, reduce_only=True):
-        for attempt in range(3):
-            try:
-                return await self.safe_create_order(
-                    symbol=symbol,
-                    type='market',
-                    side=side,
-                    amount=amount,
-                    params={"reduceOnly": reduce_only}
-                )
-            except Exception as e:
-                err = str(e)
-
-                if "-1007" in err or "status unknown" in err.lower():
-                    await asyncio.sleep(2)
-                    continue
-
-                raise e
-
-        return None
 
     async def close_position(self, position_id: int, emergency: bool = False) -> bool:
         """Закрытие позиции"""
@@ -1664,6 +1531,7 @@ class SmartMoneyBot:
             logger.error(f"Ошибка закрытия позиции {position_id}: {e}")
             await self.send_telegram_message(f"❌ Ошибка закрытия: {e}")
             return False
+
     async def close_all_positions(self, emergency: bool = False):
         """Закрытие всех позиций"""
         position_ids = list(self.positions.keys())
@@ -1749,7 +1617,7 @@ class SmartMoneyBot:
 
             # Ставим новый SL
             close_side = 'BUY' if position.side == 'SHORT' else 'SELL'
-            await self.safe_create_order(
+            await self.exchange.create_order(
                 symbol=position.symbol,
                 type='STOP_MARKET',
                 side=close_side,
@@ -2107,9 +1975,6 @@ class SmartMoneyBot:
         logger.info(f"Начало сканирования рынка... ({len(self.symbols_to_scan)} символов)")
 
         for symbol in self.symbols_to_scan:
-            if symbol not in self.exchange.markets:
-                logger.warning(f"Символ {symbol} не найден на Binance Futures")
-                continue
             # Проверка лимита
             if self.signals_today >= self.max_signals_per_day:
                 break
@@ -2129,17 +1994,17 @@ class SmartMoneyBot:
             if smc_result['signal'] and smc_result['score'] >= config.MIN_INDICATORS_SCORE:
                 logger.info(f"СИГНАЛ найден: {symbol} (score: {smc_result['score']}/{config.TOTAL_INDICATORS})")
 
-                # Фильтр Funding Rate (защита от экстремального перекоса)
+                # Фильтр Funding Rate (защита от толпы)
                 try:
                     funding_info = await self.exchange.fetch_funding_rate(symbol)
                     funding_rate = float(funding_info.get('fundingRate', 0))
                     direction = smc_result.get('direction', 'LONG')
 
-                    if direction == 'LONG' and funding_rate > 0.003:
-                        logger.info(f"Пропуск LONG {symbol}: экстремальный funding={funding_rate:.4%}")
+                    if direction == 'LONG' and funding_rate > 0.0005:
+                        logger.info(f"Пропуск LONG {symbol}: толпа в лонгах (funding={funding_rate:.4%})")
                         continue
-                    elif direction == 'SHORT' and funding_rate < -0.003:
-                        logger.info(f"Пропуск SHORT {symbol}: экстремальный funding={funding_rate:.4%}")
+                    elif direction == 'SHORT' and funding_rate < -0.0005:
+                        logger.info(f"Пропуск SHORT {symbol}: толпа в шортах (funding={funding_rate:.4%})")
                         continue
                 except Exception:
                     pass  # если API не поддерживает — пропускаем фильтр
@@ -2149,11 +2014,7 @@ class SmartMoneyBot:
                 entry_price = ticker['last']
 
                 # Открытие позиции
-                position = await self.open_position(symbol, entry_price, smc_result)
-                if position:
-                    logger.info(f"✅ ПОЗИЦИЯ ОТКРЫТА: {symbol} {position.side} @ {entry_price}")
-                else:
-                    logger.warning(f"❌ ПОЗИЦИЯ НЕ ОТКРЫТА: {symbol} (open_position вернул None)")
+                await self.open_position(symbol, entry_price, smc_result)
 
                 # Пауза между сделками
                 await asyncio.sleep(5)
@@ -2765,22 +2626,9 @@ class SmartMoneyBot:
 
                 await app.initialize()
                 await app.start()
-
-                try:
-                    await app.bot.delete_webhook(drop_pending_updates=True)
-                except Exception:
-                    pass
-
-                if app.updater and not app.updater.running:
-                    await app.updater.start_polling(
-                        allowed_updates=Update.ALL_TYPES,
-                        drop_pending_updates=True
-                    )
+                await app.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
                 while self.is_running:
-                    if app.updater and not app.updater.running:
-                        logger.warning("Telegram polling stopped. Restarting...")
-                        break
                     await asyncio.sleep(5)
 
             except telegram.error.Conflict as e:
@@ -2884,21 +2732,19 @@ class SmartMoneyBot:
         await self.disconnect()
 
 
-
 # ============================================================================
 # ЗАПУСК
 # ============================================================================
 def _env_secret(*names: str) -> str:
-    """Читает первую непустую переменную окружения, убирает пробелы и BOM."""
+    """Читает первую непустую переменную окружения, убирает пробелы и BOM (частая причина -2015)."""
     for n in names:
         raw = os.getenv(n)
         if raw is None:
             continue
-        s = raw.strip().strip("\ufeff").strip('"').strip("\'")
+        s = raw.strip().strip('\ufeff').strip('"').strip("'")
         if s:
             return s
     return ''
-
 async def main():
     """Точка входа"""
     from dotenv import load_dotenv
@@ -2921,10 +2767,12 @@ async def main():
     config.DRAWDOWN_ALERT = float(os.getenv('DRAWDOWN_ALERT', '12.0'))
     use_testnet = os.getenv('BINANCE_TESTNET', 'False').lower() == 'true'
 
+    # Проверка наличия ключей
     if not all([API_KEY, API_SECRET, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
         logger.warning("⚠️ Не настроены переменные окружения! Бот будет работать только с aiohttp сервером.")
-        logger.warning("Установите: BINANCE_API_KEY, BINANCE_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID")
+        logger.warning("   Установите: BINANCE_API_KEY, BINANCE_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID")
 
+    # Создание и запуск бота
     bot = SmartMoneyBot(
         api_key=API_KEY,
         api_secret=API_SECRET,
@@ -2938,6 +2786,7 @@ async def main():
         started = await bot.start()
         if started is False:
             logger.warning("⚠️ Бот не подключился к Binance. Повторная попытка через 60 сек...")
+            # Не выходим, а ждём и пробуем снова
             while True:
                 await asyncio.sleep(60)
                 started = await bot.start()
