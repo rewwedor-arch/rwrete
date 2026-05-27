@@ -812,7 +812,7 @@ class SMCAnalyzer:
         return ''
 
     async def analyze_symbol(self, symbol: str) -> Dict[str, Any]:
-        """Анализ символа — 7 индикаторов, LONG + SHORT"""
+        """Анализ символа — 7 индикаторов, LONG + SHORT с фильтром Premium/Discount"""
         result = {
             'symbol': symbol,
             'score': 0,
@@ -830,9 +830,10 @@ class SMCAnalyzer:
 
         try:
             ohlcv_5m = await self.get_ohlcv(symbol, config.SCANNER_TIMEFRAME, limit=100)
-            ohlcv_15m = await self.get_ohlcv(symbol, config.TREND_TIMEFRAME, limit=200)
+            # Увеличиваем лимит до 300 свечей для железобетонной стабилизации EMA200
+            ohlcv_1h = await self.get_ohlcv(symbol, config.TREND_TIMEFRAME, limit=300)
 
-            if not ohlcv_5m or not ohlcv_15m:
+            if not ohlcv_5m or not ohlcv_1h:
                 return result
 
             closes_5m = [c[4] for c in ohlcv_5m]
@@ -840,7 +841,14 @@ class SMCAnalyzer:
             lows_5m = [l[3] for l in ohlcv_5m]
             volumes_5m = [v[5] for v in ohlcv_5m]
             current_price = closes_5m[-1]
-            # Считаем текущую волатильность (ATR)
+            
+            # --- РАСЧЕТ МАТРИЦЫ ПРЕМИУМ / ДИСКОНТ (За последние 24 часа старшего таймфрейма) ---
+            highs_1h = [h[2] for h in ohlcv_1h]
+            lows_1h = [l[3] for l in ohlcv_1h]
+            max_1h = max(highs_1h[-24:])
+            min_1h = min(lows_1h[-24:])
+            equilibrium = (max_1h + min_1h) / 2 # Справедливая цена середины диапазона
+
             atr_val = self.calculate_atr(highs_5m, lows_5m, closes_5m, 14)
             result['atr'] = atr_val
             long_score = 0
@@ -848,8 +856,8 @@ class SMCAnalyzer:
             long_ind = {}
             short_ind = {}
 
-            # 1. BOS/CHoCH
-            bos = self.detect_bos_choch(ohlcv_15m)
+            # 1. BOS/CHoCH — Переносим на 5м для точного подтверждения точки входа!
+            bos = self.detect_bos_choch(ohlcv_5m)
             result['bos'] = bos
             if bos in ['BOS_UP', 'CHoCH_BULLISH']:
                 long_score += 1
@@ -879,7 +887,7 @@ class SMCAnalyzer:
 
             has_smc_structure = bool(fvg) or bool(ob)
 
-            # 3. EMA 50 (Определяем локальный тренд)
+            # 3. EMA 50 (Локальный тренд)
             ema50 = self.calculate_ema(closes_5m, 50)
             if ema50:
                 result['ema200'] = ema50[-1]
@@ -890,29 +898,25 @@ class SMCAnalyzer:
                     short_score += 1
                     short_ind['ema50_trend'] = True
 
-            # 4. RSI (Не покупаем на хаях, не продаем на лоях)
+            # 4. RSI Momentum
             rsi = self.calculate_rsi(closes_5m, 14)
             if rsi and len(rsi) >= 2:
                 result['rsi'] = rsi[-1]
-                # Не покупаем, если RSI выше 65 (уже перегрето)
                 if 45 <= rsi[-1] <= 65 and rsi[-1] > rsi[-2]:
                     long_score += 1
                     long_ind['rsi_momentum'] = True
-                # Не шортим, если RSI ниже 35 (уже перепродано)
                 if 35 <= rsi[-1] <= 55 and rsi[-1] < rsi[-2]:
                     short_score += 1
                     short_ind['rsi_momentum'] = True
 
-            # 5. ADX (ЖЕСТКИЙ ФИЛЬТР ФЛЭТА)
+            # 5. ADX (Фильтр флэта)
             adx = self.calculate_adx(highs_5m, lows_5m, closes_5m, 14)
             if adx:
                 result['adx'] = adx[-1]
                 if adx[-1] < 20:
-                    # Если тренда нет вообще - сразу убиваем анализ
                     logger.info(f"Пропуск {symbol}: Рынок во флэте (ADX = {adx[-1]:.1f})")
                     return result
                 elif adx[-1] >= 25:
-                    # Балл даем ТОЛЬКО в сторону локального тренда EMA50
                     if ema50 and current_price > ema50[-1]:
                         long_score += 1
                         long_ind['adx'] = True
@@ -920,7 +924,7 @@ class SMCAnalyzer:
                         short_score += 1
                         short_ind['adx'] = True
 
-            # 6. MACD (Без изменений, тут все ок)
+            # 6. MACD
             macd = self.calculate_macd(closes_5m)
             result['macd'] = macd
             if macd['histogram'] > 0 and macd['macd'] > macd['signal']:
@@ -930,35 +934,42 @@ class SMCAnalyzer:
                 short_score += 1
                 short_ind['macd'] = True
 
-            # 7. Объём (Балл ТОЛЬКО в сторону текущей свечи)
+            # 7. Объём
             vol_sma = self.calculate_sma(volumes_5m, 20)
             if vol_sma and vol_sma[-1] > 0:
                 vol_ratio = volumes_5m[-1] / vol_sma[-1]
-                if vol_ratio > 1.5:  # Усилили требование: объем должен быть выше нормы на 50%
+                if vol_ratio > 1.5:
                     result['volume_ok'] = True
-                    if closes_5m[-1] > closes_5m[-2]: # Растущая свеча
+                    if closes_5m[-1] > closes_5m[-2]:
                         long_score += 1
                         long_ind['volume_spike'] = True
-                    elif closes_5m[-1] < closes_5m[-2]: # Падающая свеча
+                    elif closes_5m[-1] < closes_5m[-2]:
                         short_score += 1
                         short_ind['volume_spike'] = True
-            # Выбираем лучшее направление
-                        # Получаем EMA200 с таймфрейма 15m для фильтра тренда
-            ema200_15m = self.calculate_ema([c[4] for c in ohlcv_15m], 200)
-            ema200_val = ema200_15m[-1] if ema200_15m else current_price
 
-            # Выбираем лучшее направление со строгим фильтром по HTF тренду
+            # Фильтр глобального тренда по EMA200 (1h)
+            ema200_1h = self.calculate_ema([c[4] for c in ohlcv_1h], 200)
+            ema200_val = ema200_1h[-1] if ema200_1h else current_price
+
+            # --- СТРОГАЯ СНАЙПЕРСКАЯ ФИЛЬТРАЦИЯ ВХОДА ---
             if long_score >= short_score and long_score >= config.MIN_INDICATORS_SCORE and has_smc_structure:
                 if config.USE_HTF_TREND_FILTER and current_price < ema200_val:
-                    logger.info(f"Пропуск LONG {symbol}: цена ниже EMA200 на 15m")
+                    logger.info(f"Пропуск LONG {symbol}: цена ниже EMA200 на 1h")
+                elif current_price > equilibrium:
+                    # Защита от покупок на хаях пампа
+                    logger.info(f"Пропуск LONG {symbol}: цена в зоне Premium (Слишком дорого)")
                 else:
                     result['score'] = long_score
                     result['direction'] = 'LONG'
                     result['indicators'] = long_ind
                     result['signal'] = True
+                    
             elif short_score > long_score and short_score >= config.MIN_INDICATORS_SCORE and has_smc_structure:
                 if config.USE_HTF_TREND_FILTER and current_price > ema200_val:
-                    logger.info(f"Пропуск SHORT {symbol}: цена выше EMA200 на 15m")
+                    logger.info(f"Пропуск SHORT {symbol}: цена выше EMA200 на 1h")
+                elif current_price < equilibrium:
+                    # Защита от шорта на самом дне дампа
+                    logger.info(f"Пропуск SHORT {symbol}: цена в зоне Discount (Слишком дешево)")
                 else:
                     result['score'] = short_score
                     result['direction'] = 'SHORT'
