@@ -1355,21 +1355,23 @@ class SmartMoneyBot:
                 f"est_fee=${estimated_fee:.4f}"
             )
 
-            # --- УМНЫЕ ДИНАМИЧЕСКИЕ ЦЕЛИ ПО ГРАФИКУ (ATR) ---
-            # --- УМНЫЕ ДИНАМИЧЕСКИЕ ЦЕЛИ ПО ГРАФИКУ (ATR) С ПРЕДОХРАНИТЕЛЕМ ---
+            # --- УМНЫЕ ДИНАМИЧЕСКИЕ ЦЕЛИ (ЖЕСТКАЯ ПРИВЯЗКА К ROE) ---
             atr = smc_result.get('atr', 0)
             
-            # Жесткий лимит убытка: не более 1.5% движения цены (с 50х плечом это -75% ROE, с 20x это -30% ROE)
-            max_sl_dist = actual_entry * 0.015  
+            # Жесткий лимит убытка: не более -25% ROE независимо от плеча!
+            max_roe_loss = 25.0 
+            max_sl_pct = (max_roe_loss / actual_leverage) / 100.0
+            max_sl_dist = actual_entry * max_sl_pct
 
             if atr > 0:
-                sl_dist = atr * 3.0  # Раздвигаем стоп до 3 ATR (защита от теней свечей)
-                # Если ATR слишком большой, режем стоп-лосс до безопасного максимума
+                sl_dist = atr * 2.0  # Уменьшаем с 3 до 2 ATR, чтобы не пересиживать
+                
+                # Если 2 ATR больше, чем наши допустимые -25% ROE, жестко режем стоп!
                 if sl_dist > max_sl_dist:
                     sl_dist = max_sl_dist
                     
-                tp1_dist = atr * 3.0  # Тейк-профит 1 тоже отодвигаем
-                tp3_dist = atr * 8.0  # Финальная цель для раннера
+                tp1_dist = sl_dist * 1.5  # TP всегда больше SL (Risk Reward > 1)
+                tp3_dist = sl_dist * 4.0  # Финальная цель для раннера
             else:
                 sl_dist = actual_entry * (config.STOP_LOSS_PCT / 100)
                 tp1_dist = actual_entry * (config.TAKE_PROFIT_PCT / 100)
