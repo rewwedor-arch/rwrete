@@ -992,6 +992,7 @@ class Position:
     side: str
     entry_price: float
     stop_loss: float
+    take_profit: float
     amount_usdt: float
     leverage: int
     quantity: float
@@ -1428,6 +1429,7 @@ class SmartMoneyBot:
                 side=direction,
                 entry_price=actual_entry,
                 stop_loss=actual_sl,
+                take_profit=tp1_price,  # <--- ДОБАВИТЬ ЭТУ СТРОКУ (ОБЯЗАТЕЛЬНО С ЗАПЯТОЙ!)
                 amount_usdt=margin,
                 leverage=actual_leverage,
                 quantity=actual_qty,
