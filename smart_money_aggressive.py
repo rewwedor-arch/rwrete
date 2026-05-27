@@ -2661,33 +2661,34 @@ def _env_secret(*names: str) -> str:
 
 
 async def main():
-    from dotenv import load_dotenv
+    # === ЖЕСТКИЕ НАСТРОЙКИ (Без переменных окружения Render) ===
+    
+    # 1. Твои ключи от ДЕМО аккаунта Binance (Demo Trading / Testnet)
+    API_KEY = 'a2PCBz7iGqOM6cTA7y5FdnMSuX5Ifcy5VBhvji7Ic9xzprQJFUz0nbrgDNLFWLVv'
+    API_SECRET = 'prt0b0O6Hxnrcrx9xsODMjkikxcJOf7l3I2GM5pzaBGk6yoMawo2RjFEnK7M93tC'
+    
+    # 2. Твои данные Телеграм
+    TELEGRAM_TOKEN = '7752692912:AAEcK1B0vtzEqAGbO-L9EQrN_0U4hzS8dwQ'
+    TELEGRAM_CHAT_ID = '-1003325030622'
+    USER_CHAT_ID = '259909392'
 
-    _root = Path(__file__).resolve().parent
-    load_dotenv(_root / '.env')
-
-    API_KEY = _env_secret('BINANCE_API_KEY')
-    API_SECRET = _env_secret('BINANCE_SECRET', 'BINANCE_API_SECRET')
-    TELEGRAM_TOKEN = _env_secret('TELEGRAM_BOT_TOKEN')
-    TELEGRAM_CHAT_ID = _env_secret('TELEGRAM_CHAT_ID')
-    USER_CHAT_ID = _env_secret('USER_CHAT_ID')
-
-    # Загрузка параметров из .env
-    config.DEPOSIT = float(os.getenv('DEPOSIT', config.DEPOSIT))
-    config.ENTRY_AMOUNT = float(os.getenv('ENTRY_AMOUNT', config.ENTRY_AMOUNT))
-    config.LEVERAGE = int(os.getenv('LEVERAGE', config.LEVERAGE))
-    config.STOP_LOSS_PCT = float(os.getenv('STOP_LOSS', config.STOP_LOSS_PCT))
-    config.REINVEST_PROFITS = os.getenv('REINVEST_PROFITS', 'True').lower() == 'true'
-    config.DRAWDOWN_ALERT = float(os.getenv('DRAWDOWN_ALERT', '12.0'))
-    config.MAX_CONCURRENT_POSITIONS = int(os.getenv('MAX_CONCURRENT_POSITIONS', config.MAX_CONCURRENT_POSITIONS))
-    config.MAX_SESSION_LOSS_PCT = float(os.getenv('MAX_SESSION_LOSS_PCT', config.MAX_SESSION_LOSS_PCT))
-    config.FILL_THRESHOLD = float(os.getenv('FILL_THRESHOLD', config.FILL_THRESHOLD))
-    use_testnet = True
+    # Загрузка параметров
+    config.DEPOSIT = 50.0
+    config.ENTRY_AMOUNT = 50.0
+    config.LEVERAGE = 75
+    config.STOP_LOSS_PCT = 3.5
+    config.REINVEST_PROFITS = True
+    config.DRAWDOWN_ALERT = 12.0
+    config.MAX_CONCURRENT_POSITIONS = 4
+    config.MAX_SESSION_LOSS_PCT = 30.0
+    config.FILL_THRESHOLD = 0.90
+    
+    # 3. СТРОГО True, так как эти ключи работают только в тестовой сети!
+    use_testnet = True  
 
     if not all([API_KEY, API_SECRET, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
         logger.warning(
-            "⚠️ Не настроены переменные окружения!\n"
-            "Установите: BINANCE_API_KEY, BINANCE_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID"
+            "⚠️ В коде не прописаны ключи! Проверь строки API_KEY и TELEGRAM_TOKEN"
         )
 
     bot = SmartMoneyBot(
