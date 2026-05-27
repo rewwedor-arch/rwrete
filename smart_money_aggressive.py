@@ -90,7 +90,7 @@ class StrategyConfig:
 
     # --- FIX #4: жёсткие лимиты безопасности ---
     # Максимальное число одновременных позиций
-    MAX_CONCURRENT_POSITIONS: int = 4
+    MAX_CONCURRENT_POSITIONS: int = 8
     # Стоп торгов при достижении дневной просадки (% от депозита)
     MAX_SESSION_LOSS_PCT: float = 30.0
     # Минимальный процент заполнения ордера, иначе — отмена (partial fill)
@@ -1044,7 +1044,7 @@ class SmartMoneyBot:
                 'defaultType': 'future',
                 'recvWindow': 60000,
                 'adjustForTimeDifference': True,  # <--- Вот эта запятая обязательна!
-                'keepAlive': False                 # <--- Отступ на уровне с остальными
+                'keepAlive': True                 # <--- Отступ на уровне с остальными
             }
         }
 
