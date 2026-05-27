@@ -830,11 +830,15 @@ class SMCAnalyzer:
 
         try:
             ohlcv_5m = await self.get_ohlcv(symbol, config.SCANNER_TIMEFRAME, limit=100)
-            # Увеличиваем лимит до 300 свечей для железобетонной стабилизации EMA200
-            ohlcv_1h = await self.get_ohlcv(symbol, config.TREND_TIMEFRAME, limit=300)
+ohlcv_1h = await self.get_ohlcv(symbol, config.TREND_TIMEFRAME, limit=300)
 
-            if not ohlcv_5m or not ohlcv_1h:
-                return result
+if not ohlcv_5m or not ohlcv_1h:
+    return result
+
+# Защита от слишком коротких данных
+if len(ohlcv_5m) < 50 or len(ohlcv_1h) < 200:
+    return result
+
 
             closes_5m = [c[4] for c in ohlcv_5m]
             highs_5m = [h[2] for h in ohlcv_5m]
