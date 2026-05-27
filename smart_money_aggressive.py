@@ -1043,19 +1043,16 @@ class SmartMoneyBot:
             'options': {
                 'defaultType': 'future',
                 'recvWindow': 60000,
-                'adjustForTimeDifference': True,  # <--- Вот эта запятая обязательна!
-                'keepAlive': True                 # <--- Отступ на уровне с остальными
+                'adjustForTimeDifference': True,  
+                'keepAlive': True
             }
         }
 
         self.exchange = ccxt.binanceusdm(exchange_config)
 
-                self.exchange = ccxt.binanceusdm(exchange_config)
-
-        # ПОЛНОСТЬЮ ЗАМЕНИТЬ СТАРЫЙ БЛОК if testnet НА ЭТОТ:
         if testnet:
             logger.info("🔧 Используется Binance Demo Trading (Testnet)")
-            self.exchange.set_sandbox_mode(True)  # Официальный метод включения Testnet!
+            self.exchange.set_sandbox_mode(True) 
 
         self.exchange.has['fetchCurrencies'] = False
 
