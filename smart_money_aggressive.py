@@ -1052,7 +1052,7 @@ class SmartMoneyBot:
 
         if testnet:
             logger.info("🔧 Используется Binance Demo Trading (Testnet)")
-            self.exchange.set_sandbox_mode(True) 
+            self.exchange.enable_demo_trading(True) # <--- НОВАЯ ОФИЦИАЛЬНАЯ КОМАНДА 
 
         self.exchange.has['fetchCurrencies'] = False
 
