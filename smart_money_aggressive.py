@@ -1050,17 +1050,15 @@ class SmartMoneyBot:
 
         self.exchange = ccxt.binanceusdm(exchange_config)
 
+                self.exchange = ccxt.binanceusdm(exchange_config)
+
+        # ПОЛНОСТЬЮ ЗАМЕНИТЬ СТАРЫЙ БЛОК if testnet НА ЭТОТ:
         if testnet:
-            logger.info("🔧 Используется Binance Demo Trading (demo-fapi.binance.com)")
-            demo_urls = {
-                'fapiPublic': 'https://demo-fapi.binance.com/fapi/v1',
-                'fapiPrivate': 'https://demo-fapi.binance.com/fapi/v1',
-                'fapiPublicV2': 'https://demo-fapi.binance.com/fapi/v2',
-                'fapiPrivateV2': 'https://demo-fapi.binance.com/fapi/v2',
-                'fapiPublicV3': 'https://demo-fapi.binance.com/fapi/v3',
-                'fapiPrivateV3': 'https://demo-fapi.binance.com/fapi/v3',
-            }
-            self.exchange.urls['api'].update(demo_urls)
+            logger.info("🔧 Используется Binance Demo Trading (Testnet)")
+            self.exchange.set_sandbox_mode(True)  # Официальный метод включения Testnet!
+
+        self.exchange.has['fetchCurrencies'] = False
+
 
         self.exchange.has['fetchCurrencies'] = False
 
@@ -2687,7 +2685,7 @@ async def main():
     config.MAX_CONCURRENT_POSITIONS = int(os.getenv('MAX_CONCURRENT_POSITIONS', config.MAX_CONCURRENT_POSITIONS))
     config.MAX_SESSION_LOSS_PCT = float(os.getenv('MAX_SESSION_LOSS_PCT', config.MAX_SESSION_LOSS_PCT))
     config.FILL_THRESHOLD = float(os.getenv('FILL_THRESHOLD', config.FILL_THRESHOLD))
-    use_testnet = os.getenv('BINANCE_TESTNET', 'False').lower() == 'true'
+    use_testnet = True
 
     if not all([API_KEY, API_SECRET, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
         logger.warning(
