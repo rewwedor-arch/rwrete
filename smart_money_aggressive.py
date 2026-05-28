@@ -2667,7 +2667,7 @@ async def main():
     # === ЖЕСТКИЕ НАСТРОЙКИ (Без переменных окружения Render) ===
     
     # 1. Твои ключи от ДЕМО аккаунта Binance (Demo Trading / Testnet)
-    API_KEY = 'a2PCBz7iGqOM6cTA7y5FdnMSuX5Ifcy5VBhvji7Ic9xzprQJFUz0nbrgDNLFWLVv'
+    API_KEY = 'ormgcPAf2TKBv5MwRVGsWoiCMGFTk57Fqg0cdrLl9ajJIpRR3OgVJJsISqA8Spyp'
     API_SECRET = 'prt0b0O6Hxnrcrx9xsODMjkikxcJOf7l3I2GM5pzaBGk6yoMawo2RjFEnK7M93tC'
     
     # 2. Твои данные Телеграм
