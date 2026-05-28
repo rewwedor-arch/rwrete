@@ -891,25 +891,35 @@ class SMCAnalyzer:
 
             has_smc_structure = bool(fvg) or bool(ob)
 
-            # 3. EMA 50 (Локальный тренд)
+            # ═══ 3. EMA 50 (Тренд и защита от перегретости) ═══
             ema50 = self.calculate_ema(closes_5m, 50)
+            is_near_ema = False
             if ema50:
                 result['ema200'] = ema50[-1]
-                if current_price > ema50[-1]:
+                # Считаем, насколько далеко цена улетела от средней линии
+                ema_dist_pct = abs(current_price - ema50[-1]) / ema50[-1] * 100
+                
+                # ВАЖНО: Не покупаем, если цена улетела от EMA больше чем на 0.8% (ждем откат!)
+                if ema_dist_pct <= 0.8:
+                    is_near_ema = True
+
+                if current_price > ema50[-1] and is_near_ema:
                     long_score += 1
                     long_ind['ema50_trend'] = True
-                else:
+                elif current_price < ema50[-1] and is_near_ema:
                     short_score += 1
                     short_ind['ema50_trend'] = True
 
-            # 4. RSI Momentum
+            # ═══ 4. RSI (Покупаем дно отката, а не хаи) ═══
             rsi = self.calculate_rsi(closes_5m, 14)
             if rsi and len(rsi) >= 2:
                 result['rsi'] = rsi[-1]
-                if 45 <= rsi[-1] <= 65 and rsi[-1] > rsi[-2]:
+                # LONG: RSI остыл (40-62) и начинает разворот вверх. Не покупаем перегретость >65!
+                if 40 <= rsi[-1] <= 62 and rsi[-1] > rsi[-2]:
                     long_score += 1
                     long_ind['rsi_momentum'] = True
-                if 35 <= rsi[-1] <= 55 and rsi[-1] < rsi[-2]:
+                # SHORT: RSI отскочил от перепроданности (38-60) и загибается вниз
+                if 38 <= rsi[-1] <= 60 and rsi[-1] < rsi[-2]:
                     short_score += 1
                     short_ind['rsi_momentum'] = True
 
@@ -1350,27 +1360,30 @@ class SmartMoneyBot:
                 f"est_fee=${estimated_fee:.4f}"
             )
 
-            # --- УМНЫЕ ДИНАМИЧЕСКИЕ ЦЕЛИ (ЖЕСТКАЯ ПРИВЯЗКА К ROE) ---
+            # --- ПОЛНОСТЬЮ ДИНАМИЧЕСКИЕ ЦЕЛИ (НА ОСНОВЕ ВОЛАТИЛЬНОСТИ МОНЕТЫ) ---
             atr = smc_result.get('atr', 0)
             
-            # Жесткий лимит убытка: не более -25% ROE независимо от плеча!
-            max_roe_loss = 25.0 
-            max_sl_pct = (max_roe_loss / actual_leverage) / 100.0
-            max_sl_dist = actual_entry * max_sl_pct
+            # Единственное ограничение - защита от принудительной ликвидации биржей.
+            # При 50-м плече биржа сжигает сделку при движении цены на ~1.8%.
+            # Ставим хард-лимит на 1.5%, чтобы бот закрывал сделку сам, а не биржа.
+            max_safe_dist = actual_entry * 0.015 
 
             if atr > 0:
-                sl_dist = atr * 2.0  # Уменьшаем с 3 до 2 ATR, чтобы не пересиживать
+                # Бот САМ решает: ставит стоп за пределами рыночного шума (2.5 ATR)
+                sl_dist = atr * 2.5
                 
-                # Если 2 ATR больше, чем наши допустимые -25% ROE, жестко режем стоп!
-                if sl_dist > max_sl_dist:
-                    sl_dist = max_sl_dist
+                # Если монета совсем бешеная, ограничиваем стоп защитой от ликвидации
+                if sl_dist > max_safe_dist:
+                    sl_dist = max_safe_dist
                     
-                tp1_dist = sl_dist * 1.5  # TP всегда больше SL (Risk Reward > 1)
-                tp3_dist = sl_dist * 4.0  # Финальная цель для раннера
+                # Тейк-профиты тоже подстраиваются под размах конкретной монеты
+                tp1_dist = sl_dist * 1.5  # Забираем первую прибыль
+                tp3_dist = sl_dist * 3.5  # Оставляем раннер на сильное движение
             else:
                 sl_dist = actual_entry * (config.STOP_LOSS_PCT / 100)
                 tp1_dist = actual_entry * (config.TAKE_PROFIT_PCT / 100)
                 tp3_dist = actual_entry * (config.TP3_PCT / 100)
+
 
             if direction == 'SHORT':
                 actual_sl = float(self.exchange.price_to_precision(symbol, actual_entry + sl_dist))
