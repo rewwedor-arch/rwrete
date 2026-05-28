@@ -167,6 +167,7 @@ ALLOW_TRADING = True
 async def check_fear_greed_index(bot: 'SmartMoneyBot'):
     """Фоновая проверка Crypto Fear & Greed Index каждые 30 минут."""
     global ALLOW_TRADING
+    return
     import aiohttp as _aiohttp
 
     while bot.is_running:
@@ -2663,7 +2664,32 @@ def _env_secret(*names: str) -> str:
     return ''
 
 
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
+import os
+
+def run_dummy_server():
+    """Фейковый веб-сервер для того, чтобы Render Web Service не убивал бота (обход Timed Out)"""
+    port = int(os.getenv("PORT", 10000))
+    class SimpleHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"Bot is alive and trading!")
+        # Отключаем спам в логи от постоянных проверок Render
+        def log_message(self, format, *args):
+            pass
+            
+    try:
+        server = HTTPServer(('0.0.0.0', port), SimpleHandler)
+        server.serve_forever()
+    except Exception as e:
+        pass
+
 async def main():
+    # Запуск сервера-заглушки для Render в отдельном потоке
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+
     # === ЖЕСТКИЕ НАСТРОЙКИ (Без переменных окружения Render) ===
     
     # 1. Твои ключи от ДЕМО аккаунта Binance (Demo Trading / Testnet)
@@ -2719,6 +2745,6 @@ async def main():
         logger.error(f"Критическая ошибка: {e}")
         await bot.stop()
 
-
 if __name__ == '__main__':
     asyncio.run(main())
+
