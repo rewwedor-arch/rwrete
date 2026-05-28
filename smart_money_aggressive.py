@@ -2668,7 +2668,7 @@ async def main():
     
     # 1. Твои ключи от ДЕМО аккаунта Binance (Demo Trading / Testnet)
     API_KEY = 'ormgcPAf2TKBv5MwRVGsWoiCMGFTk57Fqg0cdrLl9ajJIpRR3OgVJJsISqA8Spyp'
-    API_SECRET = 'prt0b0O6Hxnrcrx9xsODMjkikxcJOf7l3I2GM5pzaBGk6yoMawo2RjFEnK7M93tC'
+    API_SECRET = 'npSHaeqYVfmDrkSOyDfqpJHCvWc1q74zuvLp0Xhdpt4u8hRVgkE3QLMv7p5BUEtP'
     
     # 2. Твои данные Телеграм
     TELEGRAM_TOKEN = '7752692912:AAEcK1B0vtzEqAGbO-L9EQrN_0U4hzS8dwQ'
