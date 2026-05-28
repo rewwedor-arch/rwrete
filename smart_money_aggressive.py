@@ -79,7 +79,7 @@ class StrategyConfig:
     # Риск-менеджмент
     STOP_LOSS_PCT: float = 0.75
     TAKE_PROFIT_PCT: float = 2.5
-    TAKE_PROFIT: float = 2.2
+    TAKE_PROFIT: float = 4.0
     TP2_PCT: float = 4.0
     TP3_PCT: float = 7.0
 
@@ -955,44 +955,29 @@ class SMCAnalyzer:
             ema200_1h = self.calculate_ema([c[4] for c in ohlcv_1h], 200)
             ema200_val = ema200_1h[-1] if ema200_1h else current_price
 
-            # --- СТРОГАЯ СНАЙПЕРСКАЯ ФИЛЬТРАЦИЯ ВХОДА ---
-            if long_score >= short_score and long_score >= config.MIN_INDICATORS_SCORE and has_smc_structure:
-                if config.USE_HTF_TREND_FILTER and current_price < ema200_val:
-                    logger.info(f"Пропуск LONG {symbol}: цена ниже EMA200 на 1h")
-                elif current_price > equilibrium:
-                    # Защита от покупок на хаях пампа
-                    logger.info(f"Пропуск LONG {symbol}: цена в зоне Premium (Слишком дорого)")
-                else:
-                    result['score'] = long_score
-                    result['direction'] = 'LONG'
-                    result['indicators'] = long_ind
-                    result['signal'] = True
+            # --- АГРЕССИВНАЯ ФИЛЬТРАЦИЯ (МНОГО СДЕЛОК) ---
+            # Убрали проверку has_smc_structure, убрали HTF-тренд и Premium/Discount матрицы
+            if long_score >= short_score and long_score >= config.MIN_INDICATORS_SCORE:
+                result['score'] = long_score
+                result['direction'] = 'LONG'
+                result['indicators'] = long_ind
+                result['signal'] = True
                     
-            elif short_score > long_score and short_score >= config.MIN_INDICATORS_SCORE and has_smc_structure:
-                if config.USE_HTF_TREND_FILTER and current_price > ema200_val:
-                    logger.info(f"Пропуск SHORT {symbol}: цена выше EMA200 на 1h")
-                elif current_price < equilibrium:
-                    # Защита от шорта на самом дне дампа
-                    logger.info(f"Пропуск SHORT {symbol}: цена в зоне Discount (Слишком дешево)")
-                else:
-                    result['score'] = short_score
-                    result['direction'] = 'SHORT'
-                    result['indicators'] = short_ind
-                    result['signal'] = True
+            elif short_score > long_score and short_score >= config.MIN_INDICATORS_SCORE:
+                result['score'] = short_score
+                result['direction'] = 'SHORT'
+                result['indicators'] = short_ind
+                result['signal'] = True
             else:
-                if long_score >= short_score:
-                    result['score'] = long_score
-                    result['direction'] = 'LONG'
-                    result['indicators'] = long_ind
-                else:
-                    result['score'] = short_score
-                    result['direction'] = 'SHORT'
-                    result['indicators'] = short_ind
+                result['score'] = max(long_score, short_score)
+                result['direction'] = 'LONG' if long_score >= short_score else 'SHORT'
+                result['indicators'] = long_ind if long_score >= short_score else short_ind
 
         except Exception as e:
             logger.error(f"Ошибка анализа {symbol}: {e}")
 
         return result
+
 
 
 # ============================================================================
@@ -2705,7 +2690,7 @@ async def main():
     config.DEPOSIT = 50.0
     config.ENTRY_AMOUNT = 50.0
     config.LEVERAGE = 75
-    config.STOP_LOSS_PCT = 3.5
+    config.STOP_LOSS_PCT = 1.0
     config.REINVEST_PROFITS = True
     config.DRAWDOWN_ALERT = 12.0
     config.MAX_CONCURRENT_POSITIONS = 4
