@@ -144,6 +144,7 @@ async def check_fear_greed_index(bot: 'SmartMoneyBot'):
     При Extreme Fear (< 25) — приостановка открытия новых сделок.
     """
     global ALLOW_TRADING
+    return
     import aiohttp as _aiohttp
 
     while bot.is_running:
