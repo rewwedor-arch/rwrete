@@ -1948,10 +1948,20 @@ class SmartMoneyBot:
             logger.debug("Предыдущее сканирование ещё не завершено — пропуск")
             return
 
+        # === ЖЕСТКОЕ РАСПИСАНИЕ ТОРГОВ (08:00 - 22:00 по времени GMT) ===
+        current_hour = datetime.now(timezone.utc).hour
+        
+        # Если время ДО 8 утра ИЛИ 22:00 и позже — бот спит
+        if current_hour < 8 or current_hour >= 22:
+            return
+        # ===================================================================
+
         async with self._scan_lock:
             if self.signals_today >= self.max_signals_per_day:
                 logger.info(f"Лимит сигналов исчерпан: {self.signals_today}")
                 return
+
+
 
             # FIX #4: проверка session loss перед сканом
             if self.is_session_loss_limit_reached():
