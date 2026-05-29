@@ -1066,20 +1066,9 @@ class SmartMoneyBot:
         self._opening_symbols: set = set()
         self._scan_lock = asyncio.Lock()
 
-        self.symbols_to_scan = [
-            'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT',
-            'ADA/USDT', 'AVAX/USDT', 'DOGE/USDT', 'DOT/USDT', 'LINK/USDT',
-            'POL/USDT', 'UNI/USDT', 'ATOM/USDT', 'LTC/USDT', 'ETC/USDT',
-            'NEAR/USDT', 'FIL/USDT', 'AAVE/USDT', 'ARB/USDT', 'OP/USDT',
-            'VANA/USDT', 'APT/USDT', 'INJ/USDT', 'RNDR/USDT', 'SUI/USDT',
-            'SEI/USDT', 'TIA/USDT', 'ORDI/USDT', 'WLD/USDT', 'GALA/USDT',
-            'FET/USDT', 'STX/USDT', 'LDO/USDT', 'GRT/USDT', 'SAND/USDT',
-            'MANA/USDT', 'FTM/USDT', 'WIF/USDT', 'JUP/USDT', 'PYTH/USDT',
-            'STRK/USDT', 'DYDX/USDT', 'GMX/USDT', 'CRV/USDT', 'CHZ/USDT',
-            'SNX/USDT', 'AXS/USDT', 'MKR/USDT', 'THETA/USDT', 'EGLD/USDT',
-            'RUNE/USDT', 'KAS/USDT', 'TON/USDT', 'IMX/USDT', 'MNT/USDT',
-            'QNT/USDT'
-        ]
+        # Список будет заполняться динамически с биржи при подключении
+        self.symbols_to_scan = []
+
 
         self.is_running = False
         self.last_scan_time = None
@@ -1109,8 +1098,17 @@ class SmartMoneyBot:
 
     async def connect(self):
         try:
+            # 1. Загружаем все рынки с биржи
             await self.exchange.load_markets()
-            logger.info("Markets loaded successfully — API ключ валиден")
+            
+            # 2. ДИНАМИЧЕСКИЙ СБОР АКТИВНЫХ МОНЕТ
+            self.symbols_to_scan = []
+            for symbol, market in self.exchange.markets.items():
+                # Берем только: активные монеты, торгуемые к USDT, линейные фьючерсы
+                if market.get('active') and symbol.endswith('/USDT') and market.get('linear'):
+                    self.symbols_to_scan.append(symbol)
+                    
+            logger.info(f"Markets loaded successfully. Динамически загружено {len(self.symbols_to_scan)} активных пар!")
 
             try:
                 balance = await self.exchange.fetch_balance()
@@ -1127,6 +1125,7 @@ class SmartMoneyBot:
         except Exception as e:
             logger.error(f"Ошибка подключения к бирже: {e}")
             return False
+
 
     def compute_optimal_slots(self, virtual_equity: float) -> int:
         """Динамически вычисляет число параллельных позиций."""
