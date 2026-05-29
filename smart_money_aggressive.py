@@ -1103,10 +1103,13 @@ class SmartMoneyBot:
             
             # 2. ДИНАМИЧЕСКИЙ СБОР АКТИВНЫХ МОНЕТ
             self.symbols_to_scan = []
-            for symbol, market in self.exchange.markets.items():
-                # Берем только: активные монеты, торгуемые к USDT, линейные фьючерсы
-                if market.get('active') and symbol.endswith('/USDT') and market.get('linear'):
-                    self.symbols_to_scan.append(symbol)
+            for symbol in self.exchange.markets.keys():
+                # Биржа отдает фьючерсы в формате BTC/USDT:USDT. Находим их:
+                if ':USDT' in symbol:
+                    # Отрезаем хвостик :USDT, чтобы бот работал корректно
+                    clean_symbol = symbol.split(':')[0] 
+                    if clean_symbol not in self.symbols_to_scan:
+                        self.symbols_to_scan.append(clean_symbol)
                     
             logger.info(f"Markets loaded successfully. Динамически загружено {len(self.symbols_to_scan)} активных пар!")
 
@@ -1125,6 +1128,7 @@ class SmartMoneyBot:
         except Exception as e:
             logger.error(f"Ошибка подключения к бирже: {e}")
             return False
+
 
 
     def compute_optimal_slots(self, virtual_equity: float) -> int:
