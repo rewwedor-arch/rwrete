@@ -101,7 +101,7 @@ class StrategyConfig:
     TAKER_FEE: float = 0.0004  # 0.04%
 
     # Режим работы
-    WORK_HOURS: str = "24/7"
+    WORK_HOURS: str = "08:00-22:00 Europe/Berlin"
     DIRECTION: str = "BOTH"
 
     # Параметры сигналов
@@ -1550,23 +1550,23 @@ class SmartMoneyBot:
                                     # Если пошли сделки с 0 PnL - значит это уже старые сделки открытия
                                     break 
                             
-# СТАЛО:
-if found_close:
-    # Биржа вернула PnL всей позиции от входа до выхода.
-    # Вычитаем уже зафиксированные partial TP чтобы не считать дважды.
-    realized_pnl = close_pnl - position.realized_pnl_usd
-else:
-    # Fallback: считаем только оставшуюся часть (remaining_quantity)
-    qty = position.remaining_quantity
-    if position.side == 'SHORT':
-        realized_pnl = (position.entry_price - exit_price) * qty
-    else:
-        realized_pnl = (exit_price - position.entry_price) * qty
-    fee = qty * exit_price * config.TAKER_FEE
-    realized_pnl -= fee
+                            # Исправлено: корректный блок после анализа сделок
+                            if found_close:
+                                # Биржа вернула PnL всей позиции от входа до выхода.
+                                # Вычитаем уже зафиксированные partial TP чтобы не считать дважды.
+                                realized_pnl = close_pnl - position.realized_pnl_usd
+                            else:
+                                # Fallback: считаем только оставшуюся часть
+                                qty = position.remaining_quantity
+                                if position.side == 'SHORT':
+                                    realized_pnl = (position.entry_price - exit_price) * qty
+                                else:
+                                    realized_pnl = (exit_price - position.entry_price) * qty
+                                fee = qty * exit_price * config.TAKER_FEE
+                                realized_pnl -= fee
 
-# Итоговый PnL всей позиции = partial TP + остаток
-total_pnl = position.realized_pnl_usd + realized_pnl
+                            # Итоговый PnL всей позиции = partial TP + остаток
+                            total_pnl = position.realized_pnl_usd + realized_pnl
 pnl_pct = (total_pnl / margin) * 100 if margin > 0 else 0.0
 
 self.db.update_position(position_id, exit_price, total_pnl, pnl_pct)
