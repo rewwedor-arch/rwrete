@@ -1551,6 +1551,7 @@ class SmartMoneyBot:
                                     break 
                             
                             if found_close:
+                                # Биржа вернула PnL всей позиции от входа до выхода.
                                 realized_pnl = close_pnl - position.realized_pnl_usd
                             else:
                                 qty = position.remaining_quantity
@@ -2816,4 +2817,3 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
-
