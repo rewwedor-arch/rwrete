@@ -1178,37 +1178,77 @@ class SmartMoneyBot:
             return True  # не блокируем если API недоступен
 
     async def calculate_position_size(self, entry_price: float, score: int = 5) -> tuple:
+        """Рассчитывает размер позиции на основе виртуального депозита ($50) и реального баланса Binance.
+        
+        Логика:
+        1. Считаем виртуальный капитал = Начальный Депозит (50) + PnL всех закрытых сделок
+        2. Вычитаем маржу, которая УЖЕ в открытых позициях
+        3. Делим виртуальный свободный баланс на количество свободных слотов
+        4. Если реальный баланс на Binance вдруг меньше нужного - ограничиваем по реальному.
+        """
         try:
+            # 1. Считаем виртуальный капитал
             stats = self.db.get_all_statistics()
             total_pnl = float(stats.get('total_pnl') or 0.0)
             virtual_equity = max(config.DEPOSIT + total_pnl, config.DEPOSIT * 0.5)
 
-            locked_margin = sum(p.amount_usdt for p in self.positions.values())
-            free_equity = virtual_equity - locked_margin
+            # 2. Вычитаем маржу в сделках
+            bot_locked_margin = sum(p.amount_usdt for p in self.positions.values())
+            virtual_free = max(virtual_equity - bot_locked_margin, 0.0)
+
+            # 3. Сколько позиций ещё можно открыть
+            current_positions = len(self.positions)
+            max_slots = config.MAX_CONCURRENT_POSITIONS
+            remaining_slots = max(1, max_slots - current_positions)
 
             logger.info(
-                f"POS_SIZE: DEPOSIT={config.DEPOSIT} total_pnl={total_pnl:.2f} "
-                f"virtual={virtual_equity:.2f} locked={locked_margin:.2f} "
-                f"free={free_equity:.2f} score={score} entry={entry_price}"
+                f"POS_SIZE: VIRTUAL_EQUITY=${virtual_equity:.2f} PNL=${total_pnl:.2f} "
+                f"LOCKED=${bot_locked_margin:.2f} VIRTUAL_FREE=${virtual_free:.2f} "
+                f"SLOTS={current_positions}/{max_slots} REMAINING={remaining_slots} "
+                f"score={score} entry={entry_price}"
             )
 
-            if free_equity < config.MIN_SLOT_USDT:
-                logger.warning(f"POS_SIZE: free_equity({free_equity:.2f}) < MIN_SLOT({config.MIN_SLOT_USDT})")
+            if virtual_free < config.MIN_SLOT_USDT:
+                logger.warning(
+                    f"POS_SIZE: virtual_free(${virtual_free:.2f}) < MIN_SLOT(${config.MIN_SLOT_USDT}) — ПРОПУСК"
+                )
                 return 0, 0, 0
 
-            optimal_slots = self.compute_optimal_slots(free_equity)
-            base_slot = virtual_equity / optimal_slots
+            # === ПРОЦЕНТ НА ПОЗИЦИЮ ===
+            amount_per_slot = virtual_free / remaining_slots
+            weight = min(max(score, config.MIN_INDICATORS_SCORE) / 5.0, 1.5)
+            amount_usdt = amount_per_slot * weight
 
-            weight = max(score, config.MIN_INDICATORS_SCORE) / 5.0
-            amount_usdt = base_slot * weight
-            max_position_cap = virtual_equity * 0.20
-            amount_usdt = min(amount_usdt, free_equity, max_position_cap)
+            # Лимиты: не более 30% от виртуального капитала
+            max_single_position = virtual_equity * 0.30
+            amount_usdt = min(amount_usdt, virtual_free, max_single_position)
 
             if amount_usdt < config.MIN_SLOT_USDT:
-                if free_equity >= config.MIN_SLOT_USDT:
+                if virtual_free >= config.MIN_SLOT_USDT:
                     amount_usdt = config.MIN_SLOT_USDT
                 else:
+                    logger.warning(f"POS_SIZE: amount_usdt=${amount_usdt:.2f} < MIN_SLOT — ПРОПУСК")
                     return 0, 0, 0
+
+            # 4. ФИНАЛЬНАЯ ПРОВЕРКА РЕАЛЬНОГО БАЛАНСА
+            try:
+                balance = await self.exchange.fetch_balance()
+                real_free = float(balance.get('USDT', {}).get('free', 0) or 0)
+                if amount_usdt > real_free:
+                    logger.warning(f"POS_SIZE: Реальных средств (${real_free:.2f}) меньше нужных (${amount_usdt:.2f})! Ограничиваем.")
+                    amount_usdt = real_free
+            except Exception as bal_err:
+                logger.warning(f"POS_SIZE: Не удалось проверить реальный баланс: {bal_err}")
+
+            if amount_usdt < config.MIN_SLOT_USDT:
+                return 0, 0, 0
+
+            pct_of_balance = (amount_usdt / virtual_equity * 100) if virtual_equity > 0 else 0
+            logger.info(
+                f"POS_SIZE RESULT: amount_usdt=${amount_usdt:.2f} "
+                f"({pct_of_balance:.1f}% от вирт. баланса) "
+                f"notional=${amount_usdt * config.LEVERAGE:.2f}"
+            )
 
             quantity = amount_usdt * config.LEVERAGE / entry_price
             return quantity, amount_usdt, amount_usdt * config.LEVERAGE
@@ -1356,10 +1396,12 @@ class SmartMoneyBot:
 
             # FIX #8: логирование с учётом комиссии
             estimated_fee = actual_qty * actual_entry * config.TAKER_FEE * 2  # вход + выход
+            actual_margin = (actual_qty * actual_entry) / actual_leverage
+            
             logger.info(
                 f"ORDER FILLED: {symbol} {direction} | "
                 f"expected_entry={entry_price:.6f} real_entry={actual_entry:.6f} | "
-                f"filled={actual_qty:.4f} | margin=${margin:.2f} | "
+                f"filled={actual_qty:.4f} | margin=${actual_margin:.2f} | "
                 f"est_fee=${estimated_fee:.4f}"
             )
 
@@ -1426,7 +1468,7 @@ class SmartMoneyBot:
                 entry_price=actual_entry,
                 stop_loss=actual_sl,
                 take_profit=tp1_price,
-                amount_usdt=margin,
+                amount_usdt=actual_margin,
                 leverage=actual_leverage,
                 quantity=actual_qty,
                 smc_score=smc_result['score'],
@@ -1443,12 +1485,12 @@ class SmartMoneyBot:
                 entry_price=actual_entry,
                 stop_loss=actual_sl,
                 take_profit=tp1_price,  # <--- ДОБАВИТЬ ЭТУ СТРОКУ (ОБЯЗАТЕЛЬНО С ЗАПЯТОЙ!)
-                amount_usdt=margin,
+                amount_usdt=actual_margin,
                 leverage=actual_leverage,
                 quantity=actual_qty,
                 remaining_quantity=actual_qty,
                 timestamp=datetime.now(timezone.utc),
-                realized_pnl_usd=0.0,
+                realized_pnl_usd=-(actual_qty * actual_entry * config.TAKER_FEE),
             )
 
             self.positions[position_id] = position
@@ -1641,16 +1683,15 @@ class SmartMoneyBot:
             else:
                 leg_pnl = (exit_price - position.entry_price) * qty_close
 
+            # Вычитаем комиссию из PnL (работает для LONG и SHORT)
+            fee = qty_close * exit_price * config.TAKER_FEE
+            leg_pnl -= fee
 
-                # FIX #8: вычитаем комиссию из PnL
-                fee = qty_close * exit_price * config.TAKER_FEE
-                leg_pnl -= fee
+            total_pnl = position.realized_pnl_usd + leg_pnl
+            margin = position.amount_usdt
+            pnl_pct = (total_pnl / margin) * 100 if margin > 0 else 0.0
 
-                total_pnl = position.realized_pnl_usd + leg_pnl
-                margin = position.amount_usdt
-                pnl_pct = (total_pnl / margin) * 100 if margin > 0 else 0.0
-
-                self.db.update_position(position_id, exit_price, total_pnl, pnl_pct)
+            self.db.update_position(position_id, exit_price, total_pnl, pnl_pct)
             self.db.update_daily_statistics(
                 total_pnl, pnl_pct,
                 count_as_trade=True,
@@ -2519,12 +2560,27 @@ class SmartMoneyBot:
         await self.send_telegram_message("🔴 Бот выключен оператором.")
 
     async def run_telegram_bot(self):
-        """Запуск Telegram бота с авто-перезапуском."""
+        """Запуск Telegram бота с авто-перезапуском и защитой от Conflict."""
         app = None
+        MAX_CONFLICT_RETRIES = 5
+        conflict_count = 0
 
         while self.is_running:
             try:
                 logger.info("Инициализация Telegram бота...")
+
+                # === ПРИНУДИТЕЛЬНАЯ ОЧИСТКА ВЕБХУКА И СТАРЫХ СЕССИЙ ===
+                # Это решает проблему Conflict, когда другой экземпляр бота
+                # (или предыдущий незавершённый) держит polling
+                try:
+                    temp_bot = Bot(token=self.telegram_token)
+                    await temp_bot.delete_webhook(drop_pending_updates=True)
+                    # Ждём чтобы Telegram серверы отпустили polling
+                    await asyncio.sleep(2)
+                    logger.info("Webhook и pending updates очищены")
+                except Exception as cleanup_err:
+                    logger.warning(f"Ошибка очистки webhook: {cleanup_err}")
+
                 app = (
                     Application.builder()
                     .token(self.telegram_token)
@@ -2575,19 +2631,37 @@ class SmartMoneyBot:
                     drop_pending_updates=True
                 )
 
+                # Если дошли сюда — polling работает, сбрасываем счётчик
+                conflict_count = 0
+                logger.info("✅ Telegram polling запущен успешно!")
+
                 while self.is_running:
                     await asyncio.sleep(5)
 
             except telegram.error.Conflict as e:
-                logger.warning(f"TG Conflict: {e}. Повтор через 30 сек...")
-                await asyncio.sleep(30)
+                conflict_count += 1
+                wait_time = min(30 * conflict_count, 120)  # экспоненциальный бэкофф до 2 мин
+                logger.warning(
+                    f"TG Conflict ({conflict_count}/{MAX_CONFLICT_RETRIES}): {e}. "
+                    f"Повтор через {wait_time} сек..."
+                )
+                if conflict_count >= MAX_CONFLICT_RETRIES:
+                    logger.error(
+                        "Слишком много Conflict ошибок! Вероятно запущен другой экземпляр бота. "
+                        "Telegram команды будут недоступны до перезапуска."
+                    )
+                    # Не убиваем бот, просто ждём дольше
+                    await asyncio.sleep(300)
+                    conflict_count = 0
+                else:
+                    await asyncio.sleep(wait_time)
             except Exception as e:
                 logger.error(f"Ошибка Telegram бота: {e}")
 
             finally:
                 if app is not None:
                     try:
-                        if hasattr(app, 'updater') and app.updater.running:
+                        if hasattr(app, 'updater') and app.updater and app.updater.running:
                             await app.updater.stop()
                     except Exception:
                         pass
@@ -2603,8 +2677,8 @@ class SmartMoneyBot:
                     app = None
 
             if self.is_running:
-                logger.info("Перезапуск Telegram через 15 сек...")
-                await asyncio.sleep(15)
+                logger.info("Перезапуск Telegram через 10 сек...")
+                await asyncio.sleep(10)
 
     async def start(self) -> bool:
         logger.info("Запуск Smart Money Aggressive Bot v2.1...")
