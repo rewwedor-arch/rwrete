@@ -1572,6 +1572,11 @@ class SmartMoneyBot:
                                 equity_reference=config.DEPOSIT
                             )
 
+                    except Exception as e:
+                        logger.warning(f'Ошибка получения истории сделок: {e}')
+                        total_pnl = position.realized_pnl_usd + realized_pnl
+                        pnl_pct = 0.0
+
 
                     # Формируем красивое сообщение
                     emoji = "✅" if realized_pnl >= 0 else "❌"
