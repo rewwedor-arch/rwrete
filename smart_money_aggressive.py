@@ -2632,6 +2632,9 @@ class SmartMoneyBot:
 
                 while self.is_running:
                     await asyncio.sleep(5)
+                    if hasattr(app, 'updater') and app.updater and not app.updater.running:
+                        logger.warning("Telegram updater остановлен (возможно Conflict). Перезапуск...")
+                        break
 
             except telegram.error.Conflict as e:
                 conflict_count += 1
