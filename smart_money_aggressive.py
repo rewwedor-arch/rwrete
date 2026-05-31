@@ -1613,6 +1613,7 @@ class SmartMoneyBot:
 
             position = self.positions[position_id]
             symbol = position.symbol
+            margin = position.amount_usdt
             qty_close = position.remaining_quantity if position.remaining_quantity > 0 else position.quantity
 
             if qty_close <= 0:
