@@ -1539,6 +1539,71 @@ class SmartMoneyBot:
             # FIX #7: снимаем блокировку символа в любом случае
             self._opening_symbols.discard(symbol)
 
+    async def _handle_already_closed_position(self, position_id: int, position: Position, margin: float):
+        symbol = position.symbol
+        logger.info(f"Позиция {symbol} закрыта на Binance (по SL/TP или вручную)")
+        realized_pnl = 0.0
+        exit_price = position.entry_price
+        try:
+            trades = await self.exchange.fetch_my_trades(symbol, limit=20)
+            if trades:
+                close_pnl = 0.0
+                found_close = False
+                for t in reversed(trades):
+                    info = t.get('info', {})
+                    pnl_str = info.get('realizedPnl', '0')
+                    pnl_val = float(pnl_str)
+                    
+                    if abs(pnl_val) > 0:
+                        close_pnl += pnl_val
+                        found_close = True
+                        exit_price = float(t.get('price', exit_price))
+                    elif found_close:
+                        break 
+                
+                if found_close:
+                    realized_pnl = close_pnl - position.realized_pnl_usd
+                else:
+                    qty = position.remaining_quantity
+                    if position.side == 'SHORT':
+                        realized_pnl = (position.entry_price - exit_price) * qty
+                    else:
+                        realized_pnl = (exit_price - position.entry_price) * qty
+                    fee = qty * exit_price * config.TAKER_FEE
+                    realized_pnl -= fee
+
+                total_pnl = position.realized_pnl_usd + realized_pnl
+                pnl_pct = (total_pnl / margin) * 100 if margin > 0 else 0.0
+
+                self.db.update_position(position_id, exit_price, total_pnl, pnl_pct)
+                self.db.update_daily_statistics(
+                    total_pnl, pnl_pct,
+                    count_as_trade=True,
+                    equity_reference=config.DEPOSIT
+                )
+
+        except Exception as e:
+            logger.warning(f'Ошибка получения истории сделок: {e}')
+            total_pnl = position.realized_pnl_usd + realized_pnl
+            pnl_pct = 0.0
+
+        emoji = "✅" if realized_pnl >= 0 else "❌"
+        await self.send_telegram_message(
+            f"{emoji} БИРЖА ЗАКРЫЛА ПОЗИЦИЮ (SL/TP) | #{symbol.replace('/USDT', '')}\n"
+            f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
+            f"🛒 Вход:  {position.entry_price:.5f}\n"
+            f"🏁 Выход: {exit_price:.5f}\n"
+            f"💰 Вложено: ${margin:.2f}\n"
+            f"📈 REAL PnL: {'+' if realized_pnl >= 0 else ''}${realized_pnl:.2f}\n"
+            f"📊 REAL ROE: {'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%\n"
+            f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
+            f"SMART MONEY 1 BOT"
+        )
+
+        if position_id in self.positions:
+            del self.positions[position_id]
+        return True
+
     async def close_position(self, position_id: int, emergency: bool = False) -> bool:
         """Закрытие позиции с синхронизацией с биржей."""
         try:
@@ -1568,75 +1633,7 @@ class SmartMoneyBot:
                         break
 
                 if not real_position_exists:
-                    logger.info(f"Позиция {symbol} уже закрыта на Binance (по SL/TP)")
-
-                    realized_pnl = 0.0
-                    exit_price = position.entry_price
-                    try:
-                        # Запрашиваем 20 последних сделок, чтобы точно зацепить все части закрытия
-                        trades = await self.exchange.fetch_my_trades(symbol, limit=20)
-                        if trades:
-                            close_pnl = 0.0
-                            found_close = False
-                            # Идем с конца (от самых свежих сделок)
-                            for t in reversed(trades):
-                                info = t.get('info', {})
-                                pnl_str = info.get('realizedPnl', '0')
-                                pnl_val = float(pnl_str)
-                                
-                                if abs(pnl_val) > 0:
-                                    close_pnl += pnl_val
-                                    found_close = True
-                                    exit_price = float(t.get('price', exit_price))
-                                elif found_close:
-                                    # Если пошли сделки с 0 PnL - значит это уже старые сделки открытия
-                                    break 
-                            
-                            if found_close:
-                                # Биржа вернула PnL всей позиции от входа до выхода.
-                                realized_pnl = close_pnl - position.realized_pnl_usd
-                            else:
-                                qty = position.remaining_quantity
-                                if position.side == 'SHORT':
-                                    realized_pnl = (position.entry_price - exit_price) * qty
-                                else:
-                                    realized_pnl = (exit_price - position.entry_price) * qty
-                                fee = qty * exit_price * config.TAKER_FEE
-                                realized_pnl -= fee
-
-                            total_pnl = position.realized_pnl_usd + realized_pnl
-                            pnl_pct = (total_pnl / margin) * 100 if margin > 0 else 0.0
-
-                            self.db.update_position(position_id, exit_price, total_pnl, pnl_pct)
-                            self.db.update_daily_statistics(
-                                total_pnl, pnl_pct,
-                                count_as_trade=True,
-                                equity_reference=config.DEPOSIT
-                            )
-
-                    except Exception as e:
-                        logger.warning(f'Ошибка получения истории сделок: {e}')
-                        total_pnl = position.realized_pnl_usd + realized_pnl
-                        pnl_pct = 0.0
-
-
-                    # Формируем красивое сообщение
-                    emoji = "✅" if realized_pnl >= 0 else "❌"
-                    await self.send_telegram_message(
-                        f"{emoji} БИРЖА ЗАКРЫЛА ПОЗИЦИЮ (SL/TP) | #{symbol.replace('/USDT', '')}\n"
-                        f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
-                        f"🛒 Вход:  {position.entry_price:.5f}\n"
-                        f"🏁 Выход: {exit_price:.5f}\n"
-                        f"💰 Вложено: ${margin:.2f}\n"
-                        f"📈 REAL PnL: {'+' if realized_pnl >= 0 else ''}${realized_pnl:.2f}\n"
-                        f"📊 REAL ROE: {'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%\n"
-                        f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
-                        f"SMART MONEY 1 BOT"
-                    )
-
-                    if position_id in self.positions:
-                        del self.positions[position_id]
-                    return True
+                    return await self._handle_already_closed_position(position_id, position, margin)
 
                 qty_close = min(qty_close, real_contracts)
 
@@ -1655,11 +1652,8 @@ class SmartMoneyBot:
             except Exception as close_error:
                 error_text = str(close_error)
                 if '-2022' in error_text or 'ReduceOnly Order is rejected' in error_text:
-                    logger.warning(f"Позиция {symbol} уже закрыта")
-                    await self.send_telegram_message(f"ℹ️ Binance уже закрыл позицию {symbol}")
-                    if position_id in self.positions:
-                        del self.positions[position_id]
-                    return True
+                    logger.warning(f"Позиция {symbol} уже закрыта (ошибка: {error_text})")
+                    return await self._handle_already_closed_position(position_id, position, margin)
                 raise
 
             # Отмена оставшихся ордеров (SL/TP)
