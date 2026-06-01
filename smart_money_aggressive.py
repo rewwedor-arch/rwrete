@@ -433,7 +433,7 @@ class Database:
                 cursor.execute(
                     '''
                     INSERT INTO statistics
-                        (date, total_trades, profitable_traders, losing_trades,
+                        (date, total_trades, profitable_trades, losing_trades,
                          total_pnl, total_pnl_pct, best_trade, worst_trade)
                     VALUES (?, 0, 0, 0, ?, 0, ?, ?)
                     ''',
@@ -1049,18 +1049,24 @@ class SmartMoneyBot:
         if self.user_chat_id:
             self.active_chat_ids.add(str(self.user_chat_id))
 
-        self._bot = Bot(token=self.telegram_token)
+        self.app = None
+
 
         # FIX #12: кэш реального баланса биржи (обновляется при каждом расчёте позиции)
         self._cached_real_balance: float = 0.0
         self._balance_cache_time: float = 0.0
 
     async def send_telegram_message(self, text: str):
+        if not getattr(self, 'app', None) or not self.app.bot:
+            return
+            
         for chat_id in list(self.active_chat_ids):
             try:
-                await self._bot.send_message(chat_id=chat_id, text=text, parse_mode='HTML')
+                await self.app.bot.send_message(chat_id=chat_id, text=text, parse_mode='HTML')
             except Exception as e:
                 logger.warning(f"Не удалось отправить сообщение в чат {chat_id}: {e}")
+
+
 
     async def disconnect(self):
         try:
@@ -2520,19 +2526,12 @@ class SmartMoneyBot:
         app = None
         MAX_CONFLICT_RETRIES = 5
         conflict_count = 0
-
+    
         while self.is_running:
             try:
                 logger.info("Инициализация Telegram бота...")
-
-                try:
-                    temp_bot = Bot(token=self.telegram_token)
-                    await temp_bot.delete_webhook(drop_pending_updates=True)
-                    await asyncio.sleep(2)
-                    logger.info("Webhook и pending updates очищены")
-                except Exception as cleanup_err:
-                    logger.warning(f"Ошибка очистки webhook: {cleanup_err}")
-
+    
+                # 1. Строим Application
                 app = (
                     Application.builder()
                     .token(self.telegram_token)
@@ -2541,7 +2540,21 @@ class SmartMoneyBot:
                     .pool_timeout(30)
                     .build()
                 )
-
+                self.app = app
+    
+                # 2. Обязательно инициализируем перед вызовами API
+                await app.initialize()
+    
+                # 3. Теперь безопасно удаляем вебхук
+                try:
+                    await app.bot.delete_webhook(drop_pending_updates=True)
+                    await asyncio.sleep(1)
+                    logger.info("Webhook и pending updates очищены")
+                except Exception as cleanup_err:
+                    logger.warning(f"Ошибка очистки webhook: {cleanup_err}")
+    
+    
+    
                 app.add_handler(CommandHandler("start", self.cmd_start))
                 app.add_handler(CommandHandler("balance", self.cmd_balance))
                 app.add_handler(CommandHandler("positions", self.cmd_positions))
@@ -2555,7 +2568,7 @@ class SmartMoneyBot:
                 app.add_handler(CommandHandler("stop_trading", self.cmd_stop_trading))
                 app.add_handler(CommandHandler("stats", self.cmd_stats))
                 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text))
-
+    
                 try:
                     from telegram import BotCommand
                     await app.bot.set_my_commands([
@@ -2574,7 +2587,7 @@ class SmartMoneyBot:
                     ])
                 except Exception as e:
                     logger.warning(f"Не удалось установить меню: {e}")
-
+    
                 self.app = app
                 await app.initialize()
                 await app.start()
@@ -2582,16 +2595,16 @@ class SmartMoneyBot:
                     allowed_updates=Update.ALL_TYPES,
                     drop_pending_updates=True
                 )
-
+    
                 conflict_count = 0
                 logger.info("✅ Telegram polling запущен успешно!")
-
+    
                 while self.is_running:
                     await asyncio.sleep(5)
                     if hasattr(app, 'updater') and app.updater and not app.updater.running:
                         logger.warning("Telegram updater остановлен (возможно Conflict). Перезапуск...")
                         break
-
+    
             except telegram.error.Conflict as e:
                 conflict_count += 1
                 wait_time = min(30 * conflict_count, 120)
@@ -2609,7 +2622,7 @@ class SmartMoneyBot:
                     await asyncio.sleep(wait_time)
             except Exception as e:
                 logger.error(f"Ошибка Telegram бота: {e}")
-
+    
             finally:
                 if app is not None:
                     try:
@@ -2627,11 +2640,11 @@ class SmartMoneyBot:
                     except Exception:
                         pass
                     app = None
-
-            if self.is_running:
-                logger.info("Перезапуск Telegram через 10 сек...")
-                await asyncio.sleep(10)
-
+    
+                if self.is_running:
+                    logger.info("Перезапуск Telegram через 10 сек...")
+                    await asyncio.sleep(10)
+    
     async def start(self) -> bool:
         logger.info("Запуск Smart Money Aggressive Bot v2.2...")
 
@@ -2701,30 +2714,6 @@ class SmartMoneyBot:
             finally:
                 logger.warning(f"Task '{name}' finished!")
 
-        try:
-            stats = self.db.get_all_statistics()
-            total_pnl = float(stats.get('total_pnl') or 0.0)
-            # FIX #11: показываем реальный баланс в стартовом сообщении
-            real_free = await self._get_real_balance()
-            virtual_eq = max(config.DEPOSIT + total_pnl, config.DEPOSIT * 0.5)
-            await self.send_telegram_message(
-                f"🟢 БОТ ВКЛЮЧЁН v2.2\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"💰 Депозит: ${config.DEPOSIT:.2f}\n"
-                f"🏦 Реальный баланс: ${real_free:.2f}\n"
-                f"📊 Виртуальный (DB): ${virtual_eq:.2f}\n"
-                f"⚙️ Плечо: x{config.LEVERAGE}\n"
-                f"🛡 SL: {config.STOP_LOSS_PCT}% ({config.STOP_LOSS_PCT * config.LEVERAGE:.0f}% ROE)\n"
-                f"🎯 TP: {config.PARTIAL_TP1_PCT:.0f}% / {config.PARTIAL_TP2_PCT:.0f}% / {config.PARTIAL_TP3_PCT:.0f}% ROE\n"
-                f"📡 Монет: {len(self.symbols_to_scan)}\n"
-                f"🔒 Макс. позиций: {config.MAX_CONCURRENT_POSITIONS}\n"
-                f"🚨 Стоп сессии: -{config.MAX_SESSION_LOSS_PCT}%\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"SMART MONEY BOT v2.2"
-            )
-        except Exception as e:
-            logger.warning(f"Не удалось отправить стартовое сообщение: {e}")
-
         tasks = [
             asyncio.create_task(task_with_log("scanner", self.run_scanner_loop())),
             asyncio.create_task(task_with_log("monitoring", self.run_monitoring_loop())),
@@ -2733,11 +2722,40 @@ class SmartMoneyBot:
             asyncio.create_task(task_with_log("telegram", self.run_telegram_bot()))
         ]
 
+        # Функция отправит сообщение через 3 секунды, когда Telegram-клиент полностью подключится
+        async def send_startup_msg():
+            await asyncio.sleep(3)
+            try:
+                stats = self.db.get_all_statistics()
+                total_pnl = float(stats.get('total_pnl') or 0.0)
+                real_free = await self._get_real_balance()
+                virtual_eq = max(config.DEPOSIT + total_pnl, config.DEPOSIT * 0.5)
+                await self.send_telegram_message(
+                    f"🟢 БОТ ВКЛЮЧЁН v2.2\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"💰 Депозит: ${config.DEPOSIT:.2f}\n"
+                    f"🏦 Реальный баланс: ${real_free:.2f}\n"
+                    f"📊 Виртуальный (DB): ${virtual_eq:.2f}\n"
+                    f"⚙️ Плечо: x{config.LEVERAGE}\n"
+                    f"🛡 SL: {config.STOP_LOSS_PCT}% ({config.STOP_LOSS_PCT * config.LEVERAGE:.0f}% ROE)\n"
+                    f"🎯 TP: {config.PARTIAL_TP1_PCT:.0f}% / {config.PARTIAL_TP2_PCT:.0f}% / {config.PARTIAL_TP3_PCT:.0f}% ROE\n"
+                    f"📡 Монет: {len(self.symbols_to_scan)}\n"
+                    f"🔒 Макс. позиций: {config.MAX_CONCURRENT_POSITIONS}\n"
+                    f"🚨 Стоп сессии: -{config.MAX_SESSION_LOSS_PCT}%\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"SMART MONEY BOT v2.2"
+                )
+            except Exception as e:
+                logger.warning(f"Не удалось отправить стартовое сообщение: {e}")
+
+        asyncio.create_task(send_startup_msg())
+
         results = await asyncio.gather(*tasks, return_exceptions=True)
         logger.error(f"All tasks finished! Results: {results}")
 
         await asyncio.sleep(60)
         return True
+
 
     async def stop(self):
         logger.info("Остановка бота...")
