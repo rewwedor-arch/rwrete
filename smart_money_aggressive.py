@@ -758,9 +758,10 @@ class SMCAnalyzer:
         current_price = ohlcv[-1][4]
 
         for i in range(len(ohlcv) - 3, -1, -1):
-        c1, c2, c3 = ohlcv[i], ohlcv[i + 1], ohlcv[i + 2]
+            c1, c2, c3 = ohlcv[i], ohlcv[i + 1], ohlcv[i + 2]
             high1, low1 = c1[2], c1[3]
             high3, low3 = c3[2], c3[3]
+
 
             if high1 < low3:
                 if high1 * 0.998 <= current_price <= low3 * 1.003:
@@ -947,13 +948,14 @@ class SMCAnalyzer:
                 if htf_ema200:
                     # Если цена ниже EMA200 - лонги полностью запрещены
                     if current_price < htf_ema200[-1]:
-            long_score -= 2  # Штраф 2 балла
-        if current_price > htf_ema200[-1]:
-            short_score -= 2 # Штраф 2 балла
-            
-        # Гарантируем, что счет не станет отрицательным
-        long_score = max(0, long_score)
-        short_score = max(0, short_score)
+                        long_score -= 2  # Штраф 2 балла
+                    if current_price > htf_ema200[-1]:
+                        short_score -= 2 # Штраф 2 балла
+                        
+                    # Гарантируем, что счет не станет отрицательным
+                    long_score = max(0, long_score)
+                    short_score = max(0, short_score)
+
 
 
 
@@ -1885,14 +1887,16 @@ class SmartMoneyBot:
                 continue
 
             async with position._monitor_lock:
-            # ✅ ЗАЩИТА: Если позиция уже полностью закрыта, пропускаем итерацию
-            if position.remaining_quantity <= 0:
-                logger.info(f"Позиция {position.symbol} уже имеет 0 остатка, удаляем из памяти.")
-                if position_id in self.positions:
-                    del self.positions[position_id]
-                continue
+                # ✅ ЗАЩИТА: Если позиция уже полностью закрыта, пропускаем итерацию
+                if position.remaining_quantity <= 0:
+                    logger.info(f"Позиция {position.symbol} уже имеет 0 остатка, удаляем из памяти.")
+                    if position_id in self.positions:
+                        del self.positions[position_id]
+                    continue
+                
                 try:
                     ticker = await self.exchange.fetch_ticker(position.symbol)
+
                     current_price = ticker['last']
 
                     pnl_pct = self.calculate_position_roe(position, current_price)
