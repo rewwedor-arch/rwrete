@@ -1756,9 +1756,14 @@ class SmartMoneyBot:
                 return
 
             try:
-                await self.exchange.cancel_all_orders(position.symbol)
-            except Exception:
-                pass
+                # Получаем активные ордера и отменяем ТОЛЬКО стоп-лосс, оставляя Take Profit
+                open_orders = await self.exchange.fetch_open_orders(position.symbol)
+                for ord in open_orders:
+                    if 'stop' in ord.get('type', '').lower():
+                        await self.exchange.cancel_order(ord['id'], position.symbol)
+            except Exception as e:
+                logger.warning(f"Ошибка отмены старого SL: {e}")
+
 
             close_side = 'BUY' if position.side == 'SHORT' else 'SELL'
             await self.exchange.create_order(
@@ -1772,6 +1777,45 @@ class SmartMoneyBot:
             logger.info(f"SL обновлён {position.symbol}: → {new_sl_price}")
         except Exception as e:
             logger.error(f"Ошибка переноса SL {position.symbol}: {e}")
+
+    async def _update_exchange_tp(self, position: 'Position', new_tp_price: float):
+        """
+        Обновляет TAKE_PROFIT_MARKET ордер на бирже с новым объёмом.
+        Необходимо после частичных закрытий (TP1, TP2, TP3),
+        чтобы биржа не отклонила ордер из-за флага reduceOnly.
+        """
+        try:
+            new_tp_price = float(self.exchange.price_to_precision(position.symbol, new_tp_price))
+            qty_rounded = float(self.exchange.amount_to_precision(position.symbol, position.remaining_quantity))
+            
+            if qty_rounded <= 0:
+                return
+
+            # Отменяем старые TP ордера
+            try:
+                open_orders = await self.exchange.fetch_open_orders(position.symbol)
+                for ord in open_orders:
+                    order_type = ord.get('type', '').lower()
+                    # Отменяем только TP, не трогая SL
+                    if 'take_profit' in order_type or order_type == 'take_profit_market':
+                        await self.exchange.cancel_order(ord['id'], position.symbol)
+            except Exception as e:
+                logger.warning(f"Ошибка отмены старого TP: {e}")
+
+            # Выставляем новый TP на оставшийся объём
+            close_side = 'BUY' if position.side == 'SHORT' else 'SELL'
+            await self.exchange.create_order(
+                symbol=position.symbol,
+                type='TAKE_PROFIT_MARKET',
+                side=close_side,
+                amount=qty_rounded,
+                params={'stopPrice': new_tp_price, 'reduceOnly': True}
+            )
+            position.take_profit = new_tp_price
+            logger.info(f"TP обновлён {position.symbol}: → {new_tp_price} (qty: {qty_rounded})")
+        except Exception as e:
+            logger.error(f"Ошибка обновления TP {position.symbol}: {e}")
+
 
     def calculate_position_roe(self, position: 'Position', current_price: float) -> float:
         if position.side == 'SHORT':
@@ -1869,41 +1913,63 @@ class SmartMoneyBot:
                     elif position.side == 'SHORT' and current_price <= position.take_profit:
                         is_tp1_hit = True
 
+                    # TP1 (ATR)
                     if is_tp1_hit and not position.partial_tp1_done:
-                        position.partial_tp1_done = True  # Ставим флаг ДО async операции
+                        position.partial_tp1_done = True
                         await self.close_partial_position(position, position.quantity * 0.40, current_price)
                         new_sl = (position.entry_price * (1 - 0.001)
                                   if position.side == 'SHORT'
                                   else position.entry_price * (1 + 0.001))
                         await self._update_exchange_sl(position, new_sl)
+                        
+                        # ✅ ДОБАВЛЕНО: обновляем TP-ордер под оставшийся объём
+                        await self._update_exchange_tp(position, position.take_profit)
+                        
                         await self.send_telegram_message(
                             f"💰 ЧАСТИЧНАЯ ФИКСАЦИЯ TP1 (ATR) | {pair}\n"
                             f"Достигнута цель по волатильности! Закрыто 40% | SL → безубыток"
                         )
 
+
+                    # TP2
                     # TP2
                     if pnl_pct >= config.PARTIAL_TP2_PCT and not position.partial_tp2_done:
-                        position.partial_tp2_done = True  # Ставим флаг ДО async операции
+                        position.partial_tp2_done = True
                         await self.close_partial_position(position, position.remaining_quantity * 0.50, current_price)
                         new_sl = (position.entry_price * (1 - 0.009)
                                   if position.side == 'SHORT'
                                   else position.entry_price * (1 + 0.009))
                         await self._update_exchange_sl(position, new_sl)
+                        
+                        # ✅ ДОБАВЛЕНО: обновляем TP-ордер под оставшийся объём
+                        await self._update_exchange_tp(position, position.take_profit)
+                        
                         await self.send_telegram_message(
                             f"🚀 TP2 | {pair}\n+{config.PARTIAL_TP2_PCT:.0f}% ROE — закрыто ещё 30% | SL → +40% ROE"
                         )
 
+
                     # TP3
                     if pnl_pct >= config.PARTIAL_TP3_PCT and not position.partial_tp3_done:
                         position.partial_tp3_done = True  # Ставим флаг ДО async операции
-                        runner_qty = position.remaining_quantity * 0.10
+                        
+                        # ✅ ИСПРАВЛЕНИЕ: считаем 10% от ПЕРВОНАЧАЛЬНОГО объёма
+                        runner_qty = position.quantity * 0.10
+                        # Защита: runner не может быть больше remaining
+                        runner_qty = min(runner_qty, position.remaining_quantity)
                         close_qty = position.remaining_quantity - runner_qty
+                        
                         if close_qty > 0:
                             await self.close_partial_position(position, close_qty, current_price)
+                        
                         new_sl = (position.entry_price * (1 - 0.018)
                                   if position.side == 'SHORT'
                                   else position.entry_price * (1 + 0.018))
                         await self._update_exchange_sl(position, new_sl)
+                        
+                        # ✅ ОБНОВЛЯЕМ TP-ордер на бирже под оставшийся объём (10%)
+                        await self._update_exchange_tp(position, position.take_profit)
+                        
                         await self.send_telegram_message(
                             f"💎 TP3 +{config.PARTIAL_TP3_PCT:.0f}% ROE | {pair}\n"
                             f"Закрыто 90% позиции!\n"
@@ -1911,6 +1977,7 @@ class SmartMoneyBot:
                         )
                         position.trailing_active = True
                         position.trailing_peak = pnl_pct
+
 
                 except Exception as e:
                     logger.error(f"Ошибка мониторинга {position_id}: {e}")
@@ -2801,12 +2868,13 @@ def run_dummy_server():
 async def main():
     threading.Thread(target=run_dummy_server, daemon=True).start()
 
-    API_KEY = 'WILLvD57TbxmrqThprlaVe3ZjzxXt3pkR6zsVqTiJOAg1Iy2hKMa7Jbiu6Y0nCFm'
-    API_SECRET = 'MqpeOJl0QxSzBV0OKvLYLZU34FtrkmNEtgQfZHeuCP8etYJZBxxOur3w2OUIGKSC'
+    API_KEY = os.getenv('BINANCE_API_KEY')
+    API_SECRET = os.getenv('BINANCE_SECRET')
 
-    TELEGRAM_TOKEN = '8988817388:AAGz9ubaNxw6U0ytvcx935GxZQAnHJ7CgHw'
-    TELEGRAM_CHAT_ID = '259909392'
-    USER_CHAT_ID = '259909392'
+    TELEGRAM_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+    TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+    USER_CHAT_ID = os.getenv('USER_CHAT_ID')
+
 
     config.DEPOSIT = 50.0
     config.ENTRY_AMOUNT = 50.0
