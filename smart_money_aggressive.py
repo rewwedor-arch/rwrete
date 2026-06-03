@@ -128,7 +128,7 @@ class StrategyConfig:
     DRAWDOWN_ALERT: float = 12.0
 
     # Momentum exit
-    MOMENTUM_EXIT_MINUTES: int = 40
+    MOMENTUM_EXIT_MINUTES: int = 120
     MOMENTUM_MIN_PROFIT: float = 0.3
     MOMENTUM_MIN_ADX: float = 23.0
 
@@ -154,7 +154,7 @@ class StrategyConfig:
     PARTIAL_TP3_PCT: float = 120.0
 
     # Время позиции
-    POSITION_TIMEOUT_HOURS: float = 1.8
+    POSITION_TIMEOUT_HOURS: float = 8.0
     BAD_POSITION_TIMEOUT_MINUTES: int = 12
     BAD_TRADE_EXIT_MINUTES: int = 6
     SMART_EXIT_ANALYSIS: bool = True
@@ -757,8 +757,8 @@ class SMCAnalyzer:
 
         current_price = ohlcv[-1][4]
 
-        for i in range(len(ohlcv) - 3):
-            c1, c2, c3 = ohlcv[i], ohlcv[i + 1], ohlcv[i + 2]
+        for i in range(len(ohlcv) - 3, -1, -1):
+        c1, c2, c3 = ohlcv[i], ohlcv[i + 1], ohlcv[i + 2]
             high1, low1 = c1[2], c1[3]
             high3, low3 = c3[2], c3[3]
 
@@ -876,7 +876,7 @@ class SMCAnalyzer:
             ema50 = self.calculate_ema(closes_5m, 50)
             is_near_ema = False
             if ema50:
-                result['ema200'] = ema50[-1]
+                result['ema50'] = ema50[-1]
                 ema_dist_pct = abs(current_price - ema50[-1]) / ema50[-1] * 100
 
                 if ema_dist_pct <= 0.8:
@@ -938,6 +938,26 @@ class SMCAnalyzer:
                         short_score += 1
                         short_ind['volume_spike'] = True
 
+
+
+            # 2.5 HTF TREND FILTER (EMA 200 on 1H)
+            if config.USE_HTF_TREND_FILTER:
+                htf_closes = [c[4] for c in ohlcv_1h]
+                htf_ema200 = self.calculate_ema(htf_closes, config.HTF_EMA_PERIOD)
+                if htf_ema200:
+                    # Если цена ниже EMA200 - лонги полностью запрещены
+                    if current_price < htf_ema200[-1]:
+            long_score -= 2  # Штраф 2 балла
+        if current_price > htf_ema200[-1]:
+            short_score -= 2 # Штраф 2 балла
+            
+        # Гарантируем, что счет не станет отрицательным
+        long_score = max(0, long_score)
+        short_score = max(0, short_score)
+
+
+
+
             if long_score >= short_score and long_score >= config.MIN_INDICATORS_SCORE:
                 result['score'] = long_score
                 result['direction'] = 'LONG'
@@ -986,6 +1006,11 @@ class Position:
     partial_tp3_done: bool = False
     dynamic_sl_level: int = 0
     realized_pnl_usd: float = 0.0
+    
+    # ✅ ДОБАВЛЯЕМ ПЕРЕМЕННЫЕ ДЛЯ ХРАНЕНИЯ ЦЕН ЦЕЛЕЙ
+    tp2_price: float = 0.0
+    tp3_price: float = 0.0
+    
     # FIX #10: локальный лок для предотвращения двойного срабатывания TP
     _monitor_lock: Any = field(default=None, repr=False, compare=False)
 
@@ -995,6 +1020,7 @@ class Position:
         # FIX #10: создаём asyncio.Lock для каждой позиции
         if self._monitor_lock is None:
             self._monitor_lock = asyncio.Lock()
+
 
 
 class SmartMoneyBot:
@@ -1402,22 +1428,30 @@ class SmartMoneyBot:
                 if sl_dist > max_safe_dist:
                     sl_dist = max_safe_dist
                 tp1_dist = sl_dist * 1.5
-                tp3_dist = sl_dist * 3.5
+                tp2_dist = sl_dist * 2.8  # Цель для TP2
+                tp3_dist = sl_dist * 4.0  # Цель для TP3
             else:
                 sl_dist = actual_entry * (config.STOP_LOSS_PCT / 100)
                 tp1_dist = actual_entry * (config.TAKE_PROFIT_PCT / 100)
+                tp2_dist = actual_entry * (config.TP2_PCT / 100)
                 tp3_dist = actual_entry * (config.TP3_PCT / 100)
 
             if direction == 'SHORT':
                 actual_sl = float(self.exchange.price_to_precision(symbol, actual_entry + sl_dist))
-                actual_tp = float(self.exchange.price_to_precision(symbol, actual_entry - tp3_dist))
-                close_side = 'BUY'
                 tp1_price = float(self.exchange.price_to_precision(symbol, actual_entry - tp1_dist))
+                tp2_price = float(self.exchange.price_to_precision(symbol, actual_entry - tp2_dist))
+                tp3_price = float(self.exchange.price_to_precision(symbol, actual_entry - tp3_dist))
+                close_side = 'BUY'
             else:
                 actual_sl = float(self.exchange.price_to_precision(symbol, actual_entry - sl_dist))
-                actual_tp = float(self.exchange.price_to_precision(symbol, actual_entry + tp3_dist))
-                close_side = 'SELL'
                 tp1_price = float(self.exchange.price_to_precision(symbol, actual_entry + tp1_dist))
+                tp2_price = float(self.exchange.price_to_precision(symbol, actual_entry + tp2_dist))
+                tp3_price = float(self.exchange.price_to_precision(symbol, actual_entry + tp3_dist))
+                close_side = 'SELL'
+
+            # На биржу в качестве финального Тейка выставляем самую дальнюю точку — TP3
+            actual_tp = tp1_price
+
 
             try:
                 await self.exchange.create_order(
@@ -1460,6 +1494,8 @@ class SmartMoneyBot:
                 entry_price=actual_entry,
                 stop_loss=actual_sl,
                 take_profit=tp1_price,
+                tp2_price=tp2_price,  # ✅ Передаем TP2
+                tp3_price=tp3_price,  # ✅ Передаем TP3
                 amount_usdt=actual_margin,
                 leverage=actual_leverage,
                 quantity=actual_qty,
@@ -1467,6 +1503,7 @@ class SmartMoneyBot:
                 timestamp=datetime.now(timezone.utc),
                 realized_pnl_usd=-(actual_qty * actual_entry * config.TAKER_FEE),
             )
+
 
             self.positions[position_id] = position
 
@@ -1519,7 +1556,7 @@ class SmartMoneyBot:
         realized_pnl = 0.0
         exit_price = position.entry_price
         try:
-            trades = await self.exchange.fetch_my_trades(symbol, limit=20)
+            trades = await self.exchange.fetch_my_trades(symbol, limit=100)
             if trades:
                 close_pnl = 0.0
                 found_close = False
@@ -1848,6 +1885,12 @@ class SmartMoneyBot:
                 continue
 
             async with position._monitor_lock:
+            # ✅ ЗАЩИТА: Если позиция уже полностью закрыта, пропускаем итерацию
+            if position.remaining_quantity <= 0:
+                logger.info(f"Позиция {position.symbol} уже имеет 0 остатка, удаляем из памяти.")
+                if position_id in self.positions:
+                    del self.positions[position_id]
+                continue
                 try:
                     ticker = await self.exchange.fetch_ticker(position.symbol)
                     current_price = ticker['last']
@@ -1883,10 +1926,10 @@ class SmartMoneyBot:
                         continue
 
                     # Trailing Stop
-                    if pnl_pct >= config.TRAILING_ACTIVATE_PCT and not position.trailing_active:
-                        position.trailing_active = True
-                        position.trailing_peak = pnl_pct
-                        logger.info(f"Трейлинг активирован для {position.symbol} на {pnl_pct:.1f}%")
+                    #if pnl_pct >= config.TRAILING_ACTIVATE_PCT and not position.trailing_active:
+                        #position.trailing_active = True
+                        #position.trailing_peak = pnl_pct
+                        #logger.info(f"Трейлинг активирован для {position.symbol} на {pnl_pct:.1f}%")
 
                     if position.trailing_active:
                         if pnl_pct > position.trailing_peak:
@@ -1917,13 +1960,13 @@ class SmartMoneyBot:
                     if is_tp1_hit and not position.partial_tp1_done:
                         position.partial_tp1_done = True
                         await self.close_partial_position(position, position.quantity * 0.40, current_price)
-                        new_sl = (position.entry_price * (1 - 0.001)
+                        new_sl = (position.entry_price * (1 - 0.003)
                                   if position.side == 'SHORT'
-                                  else position.entry_price * (1 + 0.001))
+                                  else position.entry_price * (1 + 0.003))
                         await self._update_exchange_sl(position, new_sl)
                         
-                        # ✅ ДОБАВЛЕНО: обновляем TP-ордер под оставшийся объём
-                        await self._update_exchange_tp(position, position.take_profit)
+                        # ✅ ИСПРАВЛЕНИЕ: Следующий ордер на бирже должен стоять на уровне TP2!
+                        await self._update_exchange_tp(position, position.tp2_price)
                         
                         await self.send_telegram_message(
                             f"💰 ЧАСТИЧНАЯ ФИКСАЦИЯ TP1 (ATR) | {pair}\n"
@@ -1931,7 +1974,7 @@ class SmartMoneyBot:
                         )
 
 
-                    # TP2
+
                     # TP2
                     if pnl_pct >= config.PARTIAL_TP2_PCT and not position.partial_tp2_done:
                         position.partial_tp2_done = True
@@ -1941,12 +1984,13 @@ class SmartMoneyBot:
                                   else position.entry_price * (1 + 0.009))
                         await self._update_exchange_sl(position, new_sl)
                         
-                        # ✅ ДОБАВЛЕНО: обновляем TP-ордер под оставшийся объём
-                        await self._update_exchange_tp(position, position.take_profit)
+                        # ✅ ИСПРАВЛЕНИЕ: Следующий ордер на бирже переносим на уровень TP3!
+                        await self._update_exchange_tp(position, position.tp3_price)
                         
                         await self.send_telegram_message(
                             f"🚀 TP2 | {pair}\n+{config.PARTIAL_TP2_PCT:.0f}% ROE — закрыто ещё 30% | SL → +40% ROE"
                         )
+
 
 
                     # TP3
@@ -1968,7 +2012,7 @@ class SmartMoneyBot:
                         await self._update_exchange_sl(position, new_sl)
                         
                         # ✅ ОБНОВЛЯЕМ TP-ордер на бирже под оставшийся объём (10%)
-                        await self._update_exchange_tp(position, position.take_profit)
+                        await self._update_exchange_tp(position, position.tp3_price)
                         
                         await self.send_telegram_message(
                             f"💎 TP3 +{config.PARTIAL_TP3_PCT:.0f}% ROE | {pair}\n"
@@ -2018,9 +2062,6 @@ class SmartMoneyBot:
             logger.debug("Предыдущее сканирование ещё не завершено — пропуск")
             return
 
-        current_hour_utc = datetime.now(timezone.utc).hour
-        if current_hour_utc < 5 or current_hour_utc >= 19:
-            return
 
         async with self._scan_lock:
             if self.signals_today >= self.max_signals_per_day:
@@ -2879,7 +2920,7 @@ async def main():
     config.DEPOSIT = 50.0
     config.ENTRY_AMOUNT = 50.0
     config.LEVERAGE = 75
-    config.STOP_LOSS_PCT = 1.0
+    config.STOP_LOSS_PCT = 1.5
     config.REINVEST_PROFITS = True
     config.DRAWDOWN_ALERT = 12.0
     config.MAX_CONCURRENT_POSITIONS = 4
