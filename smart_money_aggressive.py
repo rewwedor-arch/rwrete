@@ -2261,34 +2261,32 @@ class SmartMoneyBot:
             positions_info = ""
             total_open_pnl = 0
 
-        for pid, pos in self.positions.items():
-            try:
-                ticker = await self.exchange.fetch_ticker(pos.symbol)
-                current_price = ticker['last']
-                rem = max(pos.remaining_quantity, 0.0)
-                
-                if pos.side == 'SHORT':
-                    unrealized = (pos.entry_price - current_price) * rem
-                else:
-                    unrealized = (current_price - pos.entry_price) * rem
+            for pid, pos in self.positions.items():
+                try:
+                    ticker = await self.exchange.fetch_ticker(pos.symbol)
+                    current_price = ticker['last']
+                    rem = max(pos.remaining_quantity, 0.0)
                     
-                fee = rem * current_price * config.TAKER_FEE
-                unrealized -= fee
-                
-                pnl = pos.realized_pnl_usd + unrealized
-                margin = pos.amount_usdt
-                pnl_pct = (pnl / margin) * 100 if margin > 0 else 0.0
+                    if pos.side == 'SHORT':
+                        unrealized = (pos.entry_price - current_price) * rem
+                    else:
+                        unrealized = (current_price - pos.entry_price) * rem
+                        
+                    fee = rem * current_price * config.TAKER_FEE
+                    unrealized -= fee
+                    
+                    pnl = pos.realized_pnl_usd + unrealized
+                    margin = pos.amount_usdt
+                    pnl_pct = (pnl / margin) * 100 if margin > 0 else 0.0
 
-                emoji = "🟢 " if pnl >= 0 else "🔴 "
-                positions_info += (
-                    f"  {emoji} {pos.symbol.replace('/USDT', '')}:  "
-                    f"{'+' if pnl >= 0 else ''}${pnl:.2f}  "
-                    f"({'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%)\n "
-                )
-            except Exception:
-                positions_info += f"  ⚪ {pos.symbol}: данные недоступны\n "
-
-
+                    emoji = "🟢 " if pnl >= 0 else "🔴 "
+                    positions_info += (
+                        f"  {emoji} {pos.symbol.replace('/USDT', '')}:  "
+                        f"{'+' if pnl >= 0 else ''}${pnl:.2f}  "
+                        f"({'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%)\n "
+                    )
+                except Exception:
+                    positions_info += f"  ⚪ {pos.symbol}: данные недоступны\n "
 
             if not positions_info:
                 positions_info = "  Нет открытых позиций\n"
@@ -2325,6 +2323,7 @@ class SmartMoneyBot:
             logger.info("Часовой отчёт отправлен")
         except Exception as e:
             logger.error(f"Ошибка отправки часового отчёта: {e}")
+
 
     async def run_hourly_report_loop(self):
         while self.is_running:
@@ -2473,26 +2472,24 @@ class SmartMoneyBot:
             try:
                 ticker = await self.exchange.fetch_ticker(pos.symbol)
                 current_price = ticker['last']
-                    rem = max(pos.remaining_quantity, 0.0)
+                rem = max(pos.remaining_quantity, 0.0)
+                
+                # Считаем "грязный" PnL
+                if pos.side == 'SHORT':
+                    unrealized = (pos.entry_price - current_price) * rem
+                else:
+                    unrealized = (current_price - pos.entry_price) * rem
                     
-                    # Считаем "грязный" PnL
-                    if pos.side == 'SHORT':
-                        unrealized = (pos.entry_price - current_price) * rem
-                    else:
-                        unrealized = (current_price - pos.entry_price) * rem
-                        
-                    # Вычитаем комиссию будущего закрытия
-                    fee = rem * current_price * config.TAKER_FEE
-                    unrealized -= fee
-                    
-                    # Итоговые чистые значения
-                    pnl = pos.realized_pnl_usd + unrealized
-                    margin = pos.amount_usdt
-                    pnl_pct = (pnl / margin) * 100 if margin > 0 else 0.0
+                # Вычитаем комиссию будущего закрытия
+                fee = rem * current_price * config.TAKER_FEE
+                unrealized -= fee
+                
+                # Итоговые чистые значения
+                pnl = pos.realized_pnl_usd + unrealized
+                margin = pos.amount_usdt
+                pnl_pct = (pnl / margin) * 100 if margin > 0 else 0.0
 
-                    msg = (
-
-
+                msg = (
                     f"📍 {'🔴' if pos.side == 'SHORT' else '🟢'} #{pos.symbol.replace('/USDT', '')}\n"
                     f"Вход: {pos.entry_price}\n"
                     f"Текущая: {current_price}\n"
@@ -2505,6 +2502,7 @@ class SmartMoneyBot:
                 messages.append(f"Ошибка получения данных для {pos.symbol}")
 
         await update.message.reply_text("\n\n".join(messages))
+
 
     async def cmd_signals(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         message = "📡 ПОСЛЕДНИЕ СИГНАЛЫ\n\n"
