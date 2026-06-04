@@ -2261,11 +2261,12 @@ class SmartMoneyBot:
             positions_info = ""
             total_open_pnl = 0
 
-            for pid, pos in self.positions.items():
-                try:
-                    ticker = await self.exchange.fetch_ticker(pos.symbol)
-                    current_price = ticker['last']
-                    rem = max(pos.remaining_quantity, 0.0)
+        for pid, pos in self.positions.items():
+            try:
+                ticker = await self.exchange.fetch_ticker(pos.symbol)
+                current_price = ticker['last']
+                rem = max(pos.remaining_quantity, 0.0)
+                
                 if pos.side == 'SHORT':
                     unrealized = (pos.entry_price - current_price) * rem
                 else:
@@ -2278,15 +2279,16 @@ class SmartMoneyBot:
                 margin = pos.amount_usdt
                 pnl_pct = (pnl / margin) * 100 if margin > 0 else 0.0
 
+                emoji = "🟢 " if pnl >= 0 else "🔴 "
+                positions_info += (
+                    f"  {emoji} {pos.symbol.replace('/USDT', '')}:  "
+                    f"{'+' if pnl >= 0 else ''}${pnl:.2f}  "
+                    f"({'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%)\n "
+                )
+            except Exception:
+                positions_info += f"  ⚪ {pos.symbol}: данные недоступны\n "
 
-                    emoji = "🟢" if pnl >= 0 else "🔴"
-                    positions_info += (
-                        f"  {emoji} {pos.symbol.replace('/USDT', '')}: "
-                        f"{'+' if pnl >= 0 else ''}${pnl:.2f} "
-                        f"({'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%)\n"
-                    )
-                except Exception:
-                    positions_info += f"  ⚪ {pos.symbol}: данные недоступны\n"
+
 
             if not positions_info:
                 positions_info = "  Нет открытых позиций\n"
