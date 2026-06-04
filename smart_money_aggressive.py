@@ -109,6 +109,8 @@ class StrategyConfig:
     # Режим работы
     WORK_HOURS: str = "24/7"
     DIRECTION: str = "BOTH"
+    MIN_VOLUME_USDT: float = 15000000.0  # Минимальный суточный объем (15 млн $)
+
 
     # Параметры сигналов
     MIN_INDICATORS_SCORE: int = 5
@@ -1107,25 +1109,42 @@ class SmartMoneyBot:
         try:
             await self.exchange.load_markets()
 
-            # FIX #13: фильтруем TradFi символы при загрузке
+            # Получаем данные по всем парам, чтобы узнать их суточный объем
+            logger.info("Запрашиваем объемы торгов с Binance...")
+            tickers = await self.exchange.fetch_tickers()
+
+            # FIX #13 + Фильтр ликвидности
             self.symbols_to_scan = []
             skipped_tradfi = 0
+            skipped_low_vol = 0  # Счетчик отсеянных шиткоинов
+
             for symbol in self.exchange.markets.keys():
                 if ':USDT' in symbol:
                     clean_symbol = symbol.split(':')[0]
-                    # Извлекаем базовую валюту (до '/')
                     base_asset = clean_symbol.split('/')[0]
+                    
                     # Пропускаем TradFi (акции, металлы, индексы)
                     if base_asset in TRADFI_SYMBOLS_BLACKLIST:
                         skipped_tradfi += 1
                         continue
+                        
+                    # Проверяем суточный объем (отсеиваем шиткоины)
+                    ticker = tickers.get(symbol, {})
+                    vol_usdt = float(ticker.get('quoteVolume', 0) or 0)
+                    
+                    if vol_usdt < config.MIN_VOLUME_USDT:
+                        skipped_low_vol += 1
+                        continue
+
                     if clean_symbol not in self.symbols_to_scan:
                         self.symbols_to_scan.append(clean_symbol)
 
             logger.info(
-                f"Markets loaded. Загружено {len(self.symbols_to_scan)} крипто-пар. "
-                f"Пропущено TradFi: {skipped_tradfi}"
+                f"Markets loaded. Загружено: {len(self.symbols_to_scan)} пар.\n"
+                f"Пропущено TradFi: {skipped_tradfi}\n"
+                f"Пропущено шиткоинов (<${config.MIN_VOLUME_USDT/1000000:.0f}M): {skipped_low_vol}"
             )
+
 
             try:
                 balance = await self.exchange.fetch_balance()
@@ -1552,64 +1571,59 @@ class SmartMoneyBot:
         finally:
             self._opening_symbols.discard(symbol)
 
-    async def _handle_already_closed_position(self, position_id: int, position: 'Position', margin: float):
+    async def _handle_already_closed_position(self, position_id: int, position: 'Position', margin: float, reason: str = None):
         symbol = position.symbol
         logger.info(f"Позиция {symbol} закрыта на Binance (по SL/TP или вручную)")
-        realized_pnl = 0.0
+        
         exit_price = position.entry_price
         try:
-            trades = await self.exchange.fetch_my_trades(symbol, limit=100)
+            # Берем только самую последнюю сделку, чтобы узнать точную цену закрытия финального куска
+            trades = await self.exchange.fetch_my_trades(symbol, limit=5)
             if trades:
-                close_pnl = 0.0
-                found_close = False
-                for t in reversed(trades):
-                    info = t.get('info', {})
-                    pnl_str = info.get('realizedPnl', '0')
-                    pnl_val = float(pnl_str)
-
-                    if abs(pnl_val) > 0:
-                        close_pnl += pnl_val
-                        found_close = True
-                        exit_price = float(t.get('price', exit_price))
-                    elif found_close:
-                        break
-
-                if found_close:
-                    realized_pnl = close_pnl - position.realized_pnl_usd
-                else:
-                    qty = position.remaining_quantity
-                    if position.side == 'SHORT':
-                        realized_pnl = (position.entry_price - exit_price) * qty
-                    else:
-                        realized_pnl = (exit_price - position.entry_price) * qty
-                    fee = qty * exit_price * config.TAKER_FEE
-                    realized_pnl -= fee
-
-                total_pnl = position.realized_pnl_usd + realized_pnl
-                pnl_pct = (total_pnl / margin) * 100 if margin > 0 else 0.0
-
-                self.db.update_position(position_id, exit_price, total_pnl, pnl_pct)
-                self.db.update_daily_statistics(
-                    total_pnl, pnl_pct,
-                    count_as_trade=True,
-                    equity_reference=config.DEPOSIT
-                )
-                # FIX #12: сбрасываем кэш баланса после закрытия
-                self._balance_cache_time = 0
-
+                exit_price = float(trades[-1].get('price', position.entry_price))
         except Exception as e:
             logger.warning(f'Ошибка получения истории сделок: {e}')
-            total_pnl = position.realized_pnl_usd + realized_pnl
-            pnl_pct = 0.0
 
-        emoji = "✅" if realized_pnl >= 0 else "❌"
+        # 1. Считаем PnL ТОЛЬКО для оставшегося хвостика по точной цене выхода
+        qty = position.remaining_quantity
+        if position.side == 'SHORT':
+            final_leg_pnl = (position.entry_price - exit_price) * qty
+        else:
+            final_leg_pnl = (exit_price - position.entry_price) * qty
+            
+        fee = qty * exit_price * config.TAKER_FEE
+        final_leg_pnl -= fee
+
+        # 2. Складываем накопленный профит (от TP1, TP2) и профит финального хвостика
+        total_pnl = position.realized_pnl_usd + final_leg_pnl
+        pnl_pct = (total_pnl / margin) * 100 if margin > 0 else 0.0
+
+        # Обновляем базу данных
+        self.db.update_position(position_id, exit_price, total_pnl, pnl_pct)
+        self.db.update_daily_statistics(
+            total_pnl, pnl_pct,
+            count_as_trade=True,
+            equity_reference=config.DEPOSIT
+        )
+        self._balance_cache_time = 0
+
+        # ФОРМАТИРОВАНИЕ ОБЪЕДИНЕННОГО СООБЩЕНИЯ
+        emoji = "✅" if total_pnl >= 0 else "❌"
+        if reason:
+            parts = reason.split('\n', 1)
+            title = parts[0]
+            details = parts[1] + "\n" if len(parts) > 1 else ""
+            header = f"{title} | #{symbol.replace('/USDT', '')}\n{details}"
+        else:
+            header = f"{emoji} БИРЖА ЗАКРЫЛА ПОЗИЦИЮ (SL/TP) | #{symbol.replace('/USDT', '')}\n"
+
         await self.send_telegram_message(
-            f"{emoji} БИРЖА ЗАКРЫЛА ПОЗИЦИЮ (SL/TP) | #{symbol.replace('/USDT', '')}\n"
+            f"{header}"
             f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
             f"🛒 Вход:  {position.entry_price:.5f}\n"
             f"🏁 Выход: {exit_price:.5f}\n"
             f"💰 Вложено: ${margin:.2f}\n"
-            f"📈 REAL PnL: {'+' if realized_pnl >= 0 else ''}${realized_pnl:.2f}\n"
+            f"📈 REAL PnL: {'+' if total_pnl >= 0 else ''}${total_pnl:.2f}\n"
             f"📊 REAL ROE: {'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%\n"
             f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
             f"SMART MONEY 1 BOT"
@@ -1619,7 +1633,8 @@ class SmartMoneyBot:
             del self.positions[position_id]
         return True
 
-    async def close_position(self, position_id: int, emergency: bool = False) -> bool:
+
+    async def close_position(self, position_id: int, emergency: bool = False, reason: str = None) -> bool:
         try:
             if position_id not in self.positions:
                 logger.warning(f"Позиция {position_id} не найдена")
@@ -1647,7 +1662,8 @@ class SmartMoneyBot:
                         break
 
                 if not real_position_exists:
-                    return await self._handle_already_closed_position(position_id, position, margin)
+                    # ДОБАВЛЕН reason
+                    return await self._handle_already_closed_position(position_id, position, margin, reason)
 
                 qty_close = min(qty_close, real_contracts)
 
@@ -1666,7 +1682,8 @@ class SmartMoneyBot:
                 error_text = str(close_error)
                 if '-2022' in error_text or 'ReduceOnly Order is rejected' in error_text:
                     logger.warning(f"Позиция {symbol} уже закрыта (ошибка: {error_text})")
-                    return await self._handle_already_closed_position(position_id, position, margin)
+                    # ДОБАВЛЕН reason
+                    return await self._handle_already_closed_position(position_id, position, margin, reason)
                 raise
 
             try:
@@ -1702,7 +1719,6 @@ class SmartMoneyBot:
                 equity_reference=config.DEPOSIT
             )
 
-            # FIX #12: сбрасываем кэш баланса после закрытия
             self._balance_cache_time = 0
 
             del self.positions[position_id]
@@ -1713,15 +1729,25 @@ class SmartMoneyBot:
             hours = int(duration.total_seconds() // 3600)
             minutes = int((duration.total_seconds() % 3600) // 60)
 
+            # ОБНОВЛЕННАЯ СБОРКА СООБЩЕНИЯ (чтобы не было двойных текстов)
+            if emergency:
+                header = f"🚨 ЭКСТРЕННОЕ ЗАКРЫТИЕ | #{position.symbol.replace('/', '')}\n"
+            elif reason:
+                parts = reason.split('\n', 1)
+                title = parts[0]
+                details = parts[1] + "\n" if len(parts) > 1 else ""
+                header = f"{title} | #{position.symbol.replace('/', '')}\n{details}"
+            else:
+                header = f"{emoji} ПОЗИЦИЯ ЗАКРЫТА ({result_text}) | #{position.symbol.replace('/', '')}\n"
+
             message = (
-                f"{emoji} ПОЗИЦИЯ ЗАКРЫТА | {result_text}\n"
+                f"{header}"
                 f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
-                f"📍 Монета: #{position.symbol.replace('/', '')}\n"
                 f"🛒 Вход:  {position.entry_price:.5f}\n"
                 f"🏁 Выход: {exit_price:.5f}\n"
                 f"💰 Вложено: ${margin:.2f}\n"
                 f"📈 REAL PnL: {'+' if total_pnl >= 0 else ''}${total_pnl:.2f} | "
-                f"REAL ROE: {'+' if total_pnl >= 0 else ''}{pnl_pct:.1f}%\n"
+                f"REAL ROE: {'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%\n"
                 f"💸 Комиссия выхода: ~${fee:.4f}\n"
                 f"💼 Итог с баланса: ${margin + total_pnl:.2f}\n"
                 f"⏱ Время в сделке: {hours}ч {minutes}мин\n"
@@ -1729,9 +1755,6 @@ class SmartMoneyBot:
                 f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
                 f"SMART MONEY 1 BOT"
             )
-
-            if emergency:
-                message = f"🚨 ЭКСТРЕННОЕ ЗАКРЫТИЕ\n{message}"
 
             await self.send_telegram_message(message)
             logger.info(f"Позиция закрыта: {position.symbol}, PnL: ${total_pnl:.2f}")
@@ -1741,6 +1764,7 @@ class SmartMoneyBot:
             logger.error(f"Ошибка закрытия позиции {position_id}: {e}")
             await self.send_telegram_message(f"❌ Ошибка закрытия: {e}")
             return False
+
 
     async def close_all_positions(self, emergency: bool = False):
         position_ids = list(self.positions.keys())
@@ -1899,15 +1923,24 @@ class SmartMoneyBot:
 
                     current_price = ticker['last']
 
-                    pnl_pct = self.calculate_position_roe(position, current_price)
-
+                    # Единый расчет для мониторинга: с учетом уже зафиксированного PnL и остатка
                     if position.side == 'SHORT':
-                        pnl_usd = position.realized_pnl_usd + (position.entry_price - current_price) * position.remaining_quantity
+                        unrealized_pnl = (position.entry_price - current_price) * position.remaining_quantity
                     else:
-                        pnl_usd = position.realized_pnl_usd + (current_price - position.entry_price) * position.remaining_quantity
+                        unrealized_pnl = (current_price - position.entry_price) * position.remaining_quantity
+
+                    # Вычитаем примерную комиссию на закрытие остатка
+                    fee_estimate = position.remaining_quantity * current_price * config.TAKER_FEE
+                    unrealized_pnl -= fee_estimate
+
+                    pnl_usd = position.realized_pnl_usd + unrealized_pnl
+                    
+                    # ROE считается от ИЗНАЧАЛЬНОЙ маржи, чтобы цифры сходились с отчетами о закрытии
+                    pnl_pct = (pnl_usd / position.amount_usdt) * 100 if position.amount_usdt > 0 else 0.0
 
                     if isinstance(pnl_pct, (int, float)) and pnl_pct > position.peak_pnl:
                         position.peak_pnl = pnl_pct
+
 
                     pair = position.symbol.replace('/USDT', '')
 
@@ -2147,22 +2180,23 @@ class SmartMoneyBot:
                 await asyncio.sleep(2)
 
     async def send_daily_report(self):
-        """
-        FIX #11: теперь берём реальный баланс с биржи для отображения текущего состояния.
-        Дневной PnL считается из БД (закрытые сделки за сегодня).
-        """
         try:
             stats = self.db.get_daily_statistics()
-            if not stats:
-                await self.send_telegram_message("📊 ДНЕВНОЙ ОТЧЕТ\nДанных за сегодня ещё нет.")
-                return
+            db_today_pnl = float(stats.get('total_pnl') or 0.0) if stats else 0.0
+            today_trades = stats.get('total_trades', 0) if stats else 0
+            today_wins = stats.get('profitable_trades', 0) if stats else 0
+            today_losses = stats.get('losing_trades', 0) if stats else 0
 
             all_stats = self.db.get_all_statistics()
             avg_daily = all_stats.get('avg_daily_pct', 0) or 0
             deposit = config.DEPOSIT
 
-            # FIX #11: реальный баланс с биржи, не виртуальный
-            real_balance = deposit  # fallback
+            # ИСПРАВЛЕНИЕ: Плюсуем уже зафиксированный профит по открытым сделкам (TP1, TP2)
+            floating_realized_pnl = sum(max(0, p.realized_pnl_usd) for p in self.positions.values())
+            today_pnl = db_today_pnl + floating_realized_pnl
+            today_pnl_pct = (today_pnl / deposit * 100) if deposit > 0 else 0.0
+
+            real_balance = deposit
             real_pnl = 0.0
             try:
                 balance = await self.exchange.fetch_balance()
@@ -2170,17 +2204,12 @@ class SmartMoneyBot:
                 real_pnl = real_balance - deposit
             except Exception as bal_err:
                 logger.warning(f"Не удалось получить реальный баланс для отчёта: {bal_err}")
-                # Используем виртуальный как fallback
                 total_pnl_all = float(all_stats.get('total_pnl') or 0.0)
-                real_balance = deposit + total_pnl_all
-                real_pnl = total_pnl_all
+                real_balance = deposit + total_pnl_all + floating_realized_pnl
+                real_pnl = total_pnl_all + floating_realized_pnl
 
             pnl_sign = '+' if real_pnl >= 0 else ''
             pnl_pct_total = (real_pnl / deposit * 100) if deposit > 0 else 0
-
-            # Сегодняшний PnL из БД
-            today_pnl = float(stats.get('total_pnl') or 0.0)
-            today_pnl_pct = float(stats.get('total_pnl_pct') or 0.0)
 
             message = (
                 f"📊 ДНЕВНОЙ ОТЧЕТ\n"
@@ -2190,23 +2219,21 @@ class SmartMoneyBot:
                 f"  Начальный депозит: ${deposit:.2f}\n"
                 f"  Реальный баланс: ${real_balance:.2f}\n"
                 f"  PnL всего: {pnl_sign}${real_pnl:.2f} ({pnl_sign}{pnl_pct_total:.1f}%)\n\n"
-                f"📋 СТАТИСТИКА ЗА ДЕНЬ (DB):\n"
-                f"  Сделок: {stats.get('total_trades', 0)}\n"
-                f"  Прибыльных: {stats.get('profitable_trades', 0)}\n"
-                f"  Убыточных: {stats.get('losing_trades', 0)}\n"
+                f"📋 СТАТИСТИКА ЗА ДЕНЬ:\n"
+                f"  Сделок закрыто: {today_trades}\n"
+                f"  Прибыльных: {today_wins} | Убыточных: {today_losses}\n"
                 f"  PnL дня: {'+' if today_pnl >= 0 else ''}${today_pnl:.2f} "
                 f"({'+' if today_pnl_pct >= 0 else ''}{today_pnl_pct:.1f}%)\n\n"
                 f"📈 ОБЩАЯ СТАТИСТИКА:\n"
                 f"  Всего сделок: {all_stats.get('total_trades', 0)}\n"
                 f"  Win Rate: {(all_stats.get('profitable', 0) / max(all_stats.get('total_trades', 1), 1) * 100):.1f}%\n"
-                f"  Лучшая сделка: ${all_stats.get('best_trade', 0):.2f}\n"
-                f"  Худшая сделка: ${all_stats.get('worst_trade', 0):.2f}\n"
                 f"  Средний % в день: {'+' if avg_daily >= 0 else ''}{avg_daily:.1f}%"
             )
 
             await self.send_telegram_message(message)
         except Exception as e:
             logger.error(f"Ошибка отправки отчета: {e}")
+
 
     async def run_daily_report_loop(self):
         while self.is_running:
@@ -2239,13 +2266,18 @@ class SmartMoneyBot:
                     ticker = await self.exchange.fetch_ticker(pos.symbol)
                     current_price = ticker['last']
                     rem = max(pos.remaining_quantity, 0.0)
-                    if pos.side == 'SHORT':
-                        pnl = pos.realized_pnl_usd + (pos.entry_price - current_price) * rem
-                        pnl_pct = ((pos.entry_price - current_price) / pos.entry_price) * 100 * pos.leverage
-                    else:
-                        pnl = pos.realized_pnl_usd + (current_price - pos.entry_price) * rem
-                        pnl_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100 * pos.leverage
-                    total_open_pnl += pnl
+                if pos.side == 'SHORT':
+                    unrealized = (pos.entry_price - current_price) * rem
+                else:
+                    unrealized = (current_price - pos.entry_price) * rem
+                    
+                fee = rem * current_price * config.TAKER_FEE
+                unrealized -= fee
+                
+                pnl = pos.realized_pnl_usd + unrealized
+                margin = pos.amount_usdt
+                pnl_pct = (pnl / margin) * 100 if margin > 0 else 0.0
+
 
                     emoji = "🟢" if pnl >= 0 else "🔴"
                     positions_info += (
@@ -2439,15 +2471,26 @@ class SmartMoneyBot:
             try:
                 ticker = await self.exchange.fetch_ticker(pos.symbol)
                 current_price = ticker['last']
-                rem = max(pos.remaining_quantity, 0.0)
-                if pos.side == 'SHORT':
-                    pnl = pos.realized_pnl_usd + (pos.entry_price - current_price) * rem
-                    pnl_pct = ((pos.entry_price - current_price) / pos.entry_price) * 100 * pos.leverage
-                else:
-                    pnl = pos.realized_pnl_usd + (current_price - pos.entry_price) * rem
-                    pnl_pct = ((current_price - pos.entry_price) / pos.entry_price) * 100 * pos.leverage
+                    rem = max(pos.remaining_quantity, 0.0)
+                    
+                    # Считаем "грязный" PnL
+                    if pos.side == 'SHORT':
+                        unrealized = (pos.entry_price - current_price) * rem
+                    else:
+                        unrealized = (current_price - pos.entry_price) * rem
+                        
+                    # Вычитаем комиссию будущего закрытия
+                    fee = rem * current_price * config.TAKER_FEE
+                    unrealized -= fee
+                    
+                    # Итоговые чистые значения
+                    pnl = pos.realized_pnl_usd + unrealized
+                    margin = pos.amount_usdt
+                    pnl_pct = (pnl / margin) * 100 if margin > 0 else 0.0
 
-                msg = (
+                    msg = (
+
+
                     f"📍 {'🔴' if pos.side == 'SHORT' else '🟢'} #{pos.symbol.replace('/USDT', '')}\n"
                     f"Вход: {pos.entry_price}\n"
                     f"Текущая: {current_price}\n"
@@ -2530,12 +2573,19 @@ class SmartMoneyBot:
                     try:
                         ticker = await self.exchange.fetch_ticker(pos.symbol)
                         current_price = ticker['last']
+                        rem = max(pos.remaining_quantity, 0.0)
                         if pos.side == 'SHORT':
-                            roe = ((pos.entry_price - current_price) / pos.entry_price) * 100 * pos.leverage
-                            pos_pnl = pos.realized_pnl_usd + (pos.entry_price - current_price) * pos.remaining_quantity
+                            unrealized = (pos.entry_price - current_price) * rem
                         else:
-                            roe = ((current_price - pos.entry_price) / pos.entry_price) * 100 * pos.leverage
-                            pos_pnl = pos.realized_pnl_usd + (current_price - pos.entry_price) * pos.remaining_quantity
+                            unrealized = (current_price - pos.entry_price) * rem
+                            
+                        fee = rem * current_price * config.TAKER_FEE
+                        unrealized -= fee
+                        
+                        pos_pnl = pos.realized_pnl_usd + unrealized
+                        margin = pos.amount_usdt
+                        roe = (pos_pnl / margin) * 100 if margin > 0 else 0.0
+
                         unrealized_pnl += pos_pnl
                         emoji = "🟢" if roe >= 0 else "🔴"
                         positions_text += (
@@ -2774,6 +2824,10 @@ class SmartMoneyBot:
         try:
             logger.info("Синхронизация открытых позиций с Binance...")
             exchange_positions = await self.exchange.fetch_positions()
+            
+            # Подтягиваем локальную базу данных, чтобы не терять оригинальную маржу
+            db_positions_list = self.db.get_open_positions()
+            db_positions_map = {p['symbol']: p for p in db_positions_list}
 
             restored_count = 0
             for ep in exchange_positions:
@@ -2782,9 +2836,17 @@ class SmartMoneyBot:
                     symbol = ep['symbol']
                     side = 'LONG' if ep.get('side') == 'long' else 'SHORT'
                     entry_price = float(ep.get('entryPrice', 0))
-                    leverage = int(ep.get('leverage', config.LEVERAGE))
+                    
+                    # Сначала ищем сделку в БД, чтобы восстановить оригинальные параметры
+                    saved_pos = db_positions_map.get(symbol, {})
+                    
+                    leverage = int(saved_pos.get('leverage', ep.get('leverage', config.LEVERAGE)))
 
-                    amount_usdt = (abs(contracts) * entry_price) / leverage
+                    if 'amount_usdt' in saved_pos and saved_pos['amount_usdt']:
+                        amount_usdt = float(saved_pos['amount_usdt'])
+                    else:
+                        amount_usdt = (abs(contracts) * entry_price) / leverage
+
 
                     open_orders = await self.exchange.fetch_open_orders(symbol)
                     sl_price = entry_price * (0.5 if side == 'LONG' else 1.5)
