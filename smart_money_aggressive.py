@@ -1120,15 +1120,22 @@ class SmartMoneyBot:
 
             for symbol in self.exchange.markets.keys():
                 if ':USDT' in symbol:
+                    market = self.exchange.markets[symbol]
+                    # Читаем скрытый тег биржи. Оставляем ТОЛЬКО чистую крипту
+                    underlying_type = market.get('info', {}).get('underlyingType', 'COIN')
+                    
+                    if underlying_type != 'COIN':
+                        skipped_tradfi += 1
+                        continue
+
                     clean_symbol = symbol.split(':')[0]
                     base_asset = clean_symbol.split('/')[0]
                     
-                    # Пропускаем TradFi (акции, металлы, индексы)
                     if base_asset in TRADFI_SYMBOLS_BLACKLIST:
                         skipped_tradfi += 1
                         continue
                         
-                    # Проверяем суточный объем (отсеиваем шиткоины)
+                    # Фильтр шиткоинов по объему
                     ticker = tickers.get(symbol, {})
                     vol_usdt = float(ticker.get('quoteVolume', 0) or 0)
                     
@@ -1138,6 +1145,7 @@ class SmartMoneyBot:
 
                     if clean_symbol not in self.symbols_to_scan:
                         self.symbols_to_scan.append(clean_symbol)
+
 
             logger.info(
                 f"Markets loaded. Загружено: {len(self.symbols_to_scan)} пар.\n"
@@ -1775,12 +1783,12 @@ class SmartMoneyBot:
         for pid in position_ids:
             await self.close_position(pid, emergency)
 
-    async def close_partial_position(self, position: 'Position', qty_to_close: float, current_price: float):
+    async def close_partial_position(self, position: 'Position', qty_to_close: float, current_price: float) -> bool:
         """Частичное закрытие — только накапливает realized_pnl_usd в памяти."""
         try:
             qty_to_close = float(self.exchange.amount_to_precision(position.symbol, qty_to_close))
             if qty_to_close <= 0:
-                return
+                return False
 
             if position.side == 'SHORT':
                 order = await self.exchange.create_market_buy_order(
@@ -1811,9 +1819,20 @@ class SmartMoneyBot:
                 f"накоплено realized=${position.realized_pnl_usd:.4f}, "
                 f"остаток {position.remaining_quantity:.4f}"
             )
+            return True
 
         except Exception as e:
-            logger.error(f"Ошибка частичного закрытия {position.symbol}: {e}")
+            error_text = str(e)
+            logger.error(f"Ошибка частичного закрытия {position.symbol}: {error_text}")
+            
+            # ЗАЩИТА ОТ "ПОЗИЦИЙ-ПРИЗРАКОВ"
+            if '-2022' in error_text or 'ReduceOnly' in error_text or 'insufficient margin' in error_text.lower():
+                logger.warning(f"👻 {position.symbol} была закрыта биржей за нашей спиной! Финализируем...")
+                # Даем боту пинок, чтобы он немедленно осознал реальность и запросил историю
+                asyncio.create_task(self.close_position(position.id, reason="👻 ПОЗИЦИЯ ЗАКРЫТА БИРЖЕЙ\nБот выявил закрытие по SL/TP."))
+            
+            return False
+
 
     async def _update_exchange_sl(self, position: 'Position', new_sl_price: float):
         try:
