@@ -1364,50 +1364,54 @@ class SmartMoneyBot:
             logger.info(f"Открытие {dir_emoji} {symbol}: qty={quantity}, notional=${notional:.2f}, expected_entry={entry_price}")
 
             try:
-                await self.exchange.set_margin_mode('cross', symbol)
-            except Exception:
-                pass
-
-            actual_leverage = config.LEVERAGE
-            try:
-                await self.exchange.set_leverage(actual_leverage, symbol)
-            except Exception as lev_err:
-                err_str = str(lev_err)
-                if '-2015' in err_str or 'Invalid API-key' in err_str or 'permissions' in err_str:
-                    raise
-                for fallback_lev in [50, 20]:
-                    try:
-                        await self.exchange.set_leverage(fallback_lev, symbol)
-                        actual_leverage = fallback_lev
-                        break
-                    except Exception:
-                        continue
-
-            try:
-                if direction == 'SHORT':
-                    order = await self.exchange.create_market_sell_order(symbol, quantity)
-                else:
-                    order = await self.exchange.create_market_buy_order(symbol, quantity)
+                await self.exchange.set_margin_mode('isolated', symbol)
             except Exception as e:
-                err_str = str(e)
-                if '-2015' in err_str or 'Invalid API-key' in err_str:
-                    raise
-                if '-2027' in err_str or 'Exceeded' in err_str:
-                    for fallback_lev in [50, 20]:
-                        try:
-                            await self.exchange.set_leverage(fallback_lev, symbol)
-                            actual_leverage = fallback_lev
-                            if direction == 'SHORT':
-                                order = await self.exchange.create_market_sell_order(symbol, quantity)
-                            else:
-                                order = await self.exchange.create_market_buy_order(symbol, quantity)
-                            break
-                        except Exception:
-                            continue
+                logger.warning(f"Не удалось установить isolated маржу для {symbol}: {e}")
+
+
+            # --- ИСПРАВЛЕННЫЙ БЛОК УСТАНОВКИ ПЛЕЧА И ОТКРЫТИЯ ОРДЕРА ---
+            actual_leverage = config.LEVERAGE
+            order = None
+            
+            async def try_open_with_leverage(target_lev):
+                nonlocal quantity, actual_leverage
+                try:
+                    await self.exchange.set_leverage(target_lev, symbol)
+                    actual_leverage = target_lev
+                    
+                    # Пересчитываем количество монет под новое плечо, чтобы сохранить маржу
+                    quantity = margin * actual_leverage / entry_price
+                    quantity = float(self.exchange.amount_to_precision(symbol, quantity))
+                    
+                    if direction == 'SHORT':
+                        return await self.exchange.create_market_sell_order(symbol, quantity)
                     else:
-                        raise e
+                        return await self.exchange.create_market_buy_order(symbol, quantity)
+                except Exception as e:
+                    return e
+
+            res = await try_open_with_leverage(config.LEVERAGE)
+            
+            if isinstance(res, Exception):
+                err_str = str(res)
+                if '-2015' in err_str or 'Invalid API-key' in err_str or 'permissions' in err_str:
+                    raise res 
+                    
+                if 'leverage' in err_str.lower() or '-2027' in err_str or 'Exceeded' in err_str:
+                    for fallback_lev in [50, 25, 20, 10, 5]:
+                        logger.info(f"Снижаем плечо до {fallback_lev}x для {symbol} из-за лимитов биржи...")
+                        fallback_res = await try_open_with_leverage(fallback_lev)
+                        if not isinstance(fallback_res, Exception):
+                            order = fallback_res
+                            break
+                    else:
+                        raise res 
                 else:
-                    raise e
+                    raise res
+            else:
+                order = res
+            # --- КОНЕЦ БЛОКА ---
+
 
             actual_entry = float(order.get('average') or order.get('price') or entry_price)
             actual_qty = float(order.get('filled') or quantity)
@@ -1471,7 +1475,7 @@ class SmartMoneyBot:
                 close_side = 'SELL'
 
             # На биржу в качестве финального Тейка выставляем самую дальнюю точку — TP3
-            actual_tp = tp1_price
+            actual_tp = tp3_price
 
 
             try:
@@ -1538,7 +1542,7 @@ class SmartMoneyBot:
                 f"{dir_emoji} | #{symbol.replace('/', '')}\n"
                 f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n\n"
                 f"🛒 Вход:   {actual_entry:.5f}\n"
-                f"💰 Вложено: ${margin:.2f}\n"
+                f"💰 Вложено: ${actual_margin:.2f}\n"
                 f"🎯 TP1:    {tp1_price:.5f}\n"
                 f"🔴 Стоп:   {actual_sl:.5f}\n"
                 f"📐 RR: 1:{rr:.1f} | Плечо: x{actual_leverage}\n"
