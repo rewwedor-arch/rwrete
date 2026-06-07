@@ -100,7 +100,7 @@ class StrategyConfig:
     DAILY_TARGET_MAX: float = 15.0
     MAX_DAILY_LOSS_PCT: float = 10.0
 
-    MAX_CONCURRENT_POSITIONS: int = 8
+    MAX_CONCURRENT_POSITIONS: int = 12
     MAX_SESSION_LOSS_PCT: float = 30.0
     FILL_THRESHOLD: float = 0.90
     MAX_SPREAD_PCT: float = 0.05
@@ -113,11 +113,11 @@ class StrategyConfig:
 
 
     # Параметры сигналов
-    MIN_INDICATORS_SCORE: int = 5
+    MIN_INDICATORS_SCORE: int = 3
     TOTAL_INDICATORS: int = 8
 
     # Таймфреймы
-    SCANNER_TIMEFRAME: str = '5m'
+    SCANNER_TIMEFRAME: str = '15m'
     TREND_TIMEFRAME: str = '1h'
     EMA_TIMEFRAME: str = '1h'
     USE_HTF_TREND_FILTER: bool = True
@@ -754,23 +754,50 @@ class SMCAnalyzer:
         return "NONE"
 
     def detect_fvg(self, ohlcv: List[List]) -> str:
-        if len(ohlcv) < 3:
+        """Detect Fair Value Gap — real gap between candle 1 and candle 3.
+        
+        Bullish FVG: candle1.high < candle3.low (gap up) — price near or inside the gap.
+        Bearish FVG: candle1.low > candle3.high (gap down) — price near or inside the gap.
+        
+        Checks real gap existence. Allows partially filled gaps (mitigation zone).
+        """
+        if len(ohlcv) < 4:
             return ''
 
         current_price = ohlcv[-1][4]
 
-        for i in range(len(ohlcv) - 3, -1, -1):
+        # Scan last 12 candle triplets for FVG
+        for i in range(len(ohlcv) - 3, max(0, len(ohlcv) - 15) - 1, -1):
+            if i + 2 >= len(ohlcv):
+                continue
             c1, c2, c3 = ohlcv[i], ohlcv[i + 1], ohlcv[i + 2]
             high1, low1 = c1[2], c1[3]
             high3, low3 = c3[2], c3[3]
 
-
+            # Bullish FVG: real gap between candle1 high and candle3 low
             if high1 < low3:
-                if high1 * 0.998 <= current_price <= low3 * 1.003:
+                gap_top = low3
+                gap_bottom = high1
+                gap_size_pct = (gap_top - gap_bottom) / gap_bottom * 100
+                
+                # Gap must be at least 0.03% to be meaningful
+                if gap_size_pct < 0.03:
+                    continue
+                
+                # Allow price within gap or slightly above (mitigation zone +0.1%)
+                if gap_bottom * 0.999 <= current_price <= gap_top * 1.001:
                     return 'BULLISH'
 
+            # Bearish FVG: real gap between candle1 low and candle3 high  
             if low1 > high3:
-                if high3 * 0.997 <= current_price <= low1 * 1.002:
+                gap_top = low1
+                gap_bottom = high3
+                gap_size_pct = (gap_top - gap_bottom) / gap_bottom * 100
+                
+                if gap_size_pct < 0.03:
+                    continue
+                
+                if gap_bottom * 0.999 <= current_price <= gap_top * 1.001:
                     return 'BEARISH'
 
         return ''
@@ -892,23 +919,23 @@ class SMCAnalyzer:
                     short_score += 1
                     short_ind['ema50_trend'] = True
 
-            # 4. RSI
+            # 4. RSI (зона 40-60 + импульс в направлении)
             rsi = self.calculate_rsi(closes_5m, 14)
             if rsi and len(rsi) >= 2:
                 result['rsi'] = rsi[-1]
-                if 40 <= rsi[-1] <= 62 and rsi[-1] > rsi[-2]:
+                if 40 <= rsi[-1] <= 60 and rsi[-1] > rsi[-2]:
                     long_score += 1
                     long_ind['rsi_momentum'] = True
-                if 38 <= rsi[-1] <= 60 and rsi[-1] < rsi[-2]:
+                if 40 <= rsi[-1] <= 60 and rsi[-1] < rsi[-2]:
                     short_score += 1
                     short_ind['rsi_momentum'] = True
 
-            # 5. ADX
+            # 5. ADX (минимум 25 — начало тренда)
             adx = self.calculate_adx(highs_5m, lows_5m, closes_5m, 14)
             if adx:
                 result['adx'] = adx[-1]
                 if adx[-1] < 20:
-                    logger.info(f"Пропуск {symbol}: Рынок во флэте (ADX = {adx[-1]:.1f})")
+                    logger.info(f"Пропуск {symbol}: Глубокий флэт (ADX = {adx[-1]:.1f} < 20)")
                     return result
                 elif adx[-1] >= 25:
                     if ema50 and current_price > ema50[-1]:
@@ -928,51 +955,98 @@ class SMCAnalyzer:
                 short_score += 1
                 short_ind['macd'] = True
 
-            # 7. Объём
+            # 7. Объём (сильный спайк на 1 свече ИЛИ 2 свечи с умеренным объёмом)
             vol_sma = self.calculate_sma(volumes_5m, 20)
-            if vol_sma and vol_sma[-1] > 0:
-                vol_ratio = volumes_5m[-1] / vol_sma[-1]
-                if vol_ratio > 1.5:
+            if vol_sma and vol_sma[-1] > 0 and len(volumes_5m) >= 3 and len(closes_5m) >= 3:
+                vol_ratio_last = volumes_5m[-1] / vol_sma[-1]
+                
+                # Вариант A: Сильный спайк на последней свече (> 2x среднего)
+                strong_spike = vol_ratio_last > 2.0
+                
+                # Вариант B: 2 из 3 свечей с объёмом > 1.3x среднего
+                above_avg_count = 0
+                bullish_vol_count = 0
+                bearish_vol_count = 0
+                for k in range(-3, 0):
+                    if volumes_5m[k] > vol_sma[-1] * 1.3:
+                        above_avg_count += 1
+                        if closes_5m[k] > closes_5m[k - 1]:
+                            bullish_vol_count += 1
+                        elif closes_5m[k] < closes_5m[k - 1]:
+                            bearish_vol_count += 1
+                
+                if strong_spike or above_avg_count >= 2:
                     result['volume_ok'] = True
-                    if closes_5m[-1] > closes_5m[-2]:
+                    # Определяем направление
+                    if strong_spike and closes_5m[-1] > closes_5m[-2]:
                         long_score += 1
                         long_ind['volume_spike'] = True
-                    elif closes_5m[-1] < closes_5m[-2]:
+                    elif strong_spike and closes_5m[-1] < closes_5m[-2]:
+                        short_score += 1
+                        short_ind['volume_spike'] = True
+                    elif bullish_vol_count >= 2:
+                        long_score += 1
+                        long_ind['volume_spike'] = True
+                    elif bearish_vol_count >= 2:
                         short_score += 1
                         short_ind['volume_spike'] = True
 
 
 
-            # 2.5 HTF TREND FILTER (EMA 200 on 1H)
+            # === HTF TREND FILTER (EMA 200 on 1H) — ЖЁСТКИЙ БЛОК ===
             if config.USE_HTF_TREND_FILTER:
                 htf_closes = [c[4] for c in ohlcv_1h]
                 htf_ema200 = self.calculate_ema(htf_closes, config.HTF_EMA_PERIOD)
                 if htf_ema200:
-                    # Если цена ниже EMA200 - лонги полностью запрещены
+                    result['ema200'] = htf_ema200[-1]
+                    # Цена ниже EMA200 — лонги ПОЛНОСТЬЮ запрещены
                     if current_price < htf_ema200[-1]:
-                        long_score -= 2  # Штраф 2 балла
+                        long_score = 0
+                        long_ind.clear()
+                        logger.info(f"{symbol}: Лонг запрещён — цена {current_price:.4f} < EMA200 {htf_ema200[-1]:.4f}")
+                    # Цена выше EMA200 — шорты ПОЛНОСТЬЮ запрещены
                     if current_price > htf_ema200[-1]:
-                        short_score -= 2 # Штраф 2 балла
-                        
-                    # Гарантируем, что счет не станет отрицательным
-                    long_score = max(0, long_score)
-                    short_score = max(0, short_score)
+                        short_score = 0
+                        short_ind.clear()
+                        logger.info(f"{symbol}: Шорт запрещён — цена {current_price:.4f} > EMA200 {htf_ema200[-1]:.4f}")
 
-
-
-
-
+            # === СТРУКТУРНОЕ ПОДТВЕРЖДЕНИЕ: BOS ИЛИ SMC-зона (FVG/OB) ===
+            # Нужен хотя бы один SMC элемент: BOS/CHoCH ИЛИ (FVG/OB)
             if long_score >= short_score and long_score >= config.MIN_INDICATORS_SCORE:
-                result['score'] = long_score
-                result['direction'] = 'LONG'
-                result['indicators'] = long_ind
-                result['signal'] = True
+                has_smc = (
+                    long_ind.get('bos') or
+                    long_ind.get('fvg') or
+                    long_ind.get('ob')
+                )
+                if not has_smc:
+                    logger.info(f"{symbol}: Лонг {long_score} баллов, но нет SMC подтверждения (BOS/FVG/OB)")
+                    result['score'] = long_score
+                    result['direction'] = 'LONG'
+                    result['indicators'] = long_ind
+                    result['signal'] = False
+                else:
+                    result['score'] = long_score
+                    result['direction'] = 'LONG'
+                    result['indicators'] = long_ind
+                    result['signal'] = True
 
             elif short_score > long_score and short_score >= config.MIN_INDICATORS_SCORE:
-                result['score'] = short_score
-                result['direction'] = 'SHORT'
-                result['indicators'] = short_ind
-                result['signal'] = True
+                has_smc = (
+                    short_ind.get('bos') or
+                    short_ind.get('fvg') or
+                    short_ind.get('ob')
+                )
+                if not has_smc:
+                    logger.info(f"{symbol}: Шорт {short_score} баллов, но нет SMC подтверждения (BOS/FVG/OB)")
+                    result['score'] = short_score
+                    result['direction'] = 'SHORT'
+                    result['indicators'] = short_ind
+                    result['signal'] = False
+                else:
+                    result['score'] = short_score
+                    result['direction'] = 'SHORT'
+                    result['indicators'] = short_ind
+                    result['signal'] = True
             else:
                 result['score'] = max(long_score, short_score)
                 result['direction'] = 'LONG' if long_score >= short_score else 'SHORT'
