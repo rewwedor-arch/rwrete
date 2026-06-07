@@ -1315,7 +1315,13 @@ class SmartMoneyBot:
             # 1. Считаем виртуальный капитал
             stats = self.db.get_all_statistics()
             total_pnl = float(stats.get('total_pnl') or 0.0)
-            virtual_equity = max(config.DEPOSIT + total_pnl, config.DEPOSIT * 0.5)
+            
+            # Если реинвест включен, прибавляем профит к депо
+            if config.REINVEST_PROFITS and total_pnl > 0:
+                virtual_equity = config.DEPOSIT + total_pnl
+            else:
+                # Если выключен или убыток - отталкиваемся от депо/убытка (но не ниже 50% депо)
+                virtual_equity = max(config.DEPOSIT + min(0, total_pnl), config.DEPOSIT * 0.5)
 
             # FIX #12: РЕАЛЬНЫЙ баланс биржи — жёсткий потолок для виртуального
             real_free = await self._get_real_balance()
@@ -1663,10 +1669,26 @@ class SmartMoneyBot:
         
         exit_price = position.entry_price
         try:
-            # Берем только самую последнюю сделку, чтобы узнать точную цену закрытия финального куска
-            trades = await self.exchange.fetch_my_trades(symbol, limit=5)
+            # FIX: Ищем трейды ПОСЛЕ открытия позиции, чтобы не взять трейд открытия
+            since_ms = int(position.timestamp.timestamp() * 1000) + 1000  # +1 сек после открытия
+            trades = await self.exchange.fetch_my_trades(symbol, since=since_ms, limit=20)
+            
             if trades:
-                exit_price = float(trades[-1].get('price', position.entry_price))
+                # Берём последний трейд — это трейд закрытия
+                # Дополнительная проверка: трейд должен быть в противоположном направлении
+                close_side = 'sell' if position.side == 'LONG' else 'buy'
+                closing_trades = [t for t in trades if t.get('side', '').lower() == close_side]
+                
+                if closing_trades:
+                    exit_price = float(closing_trades[-1].get('price', position.entry_price))
+                else:
+                    # Если не нашли по стороне, берём последний трейд
+                    exit_price = float(trades[-1].get('price', position.entry_price))
+            else:
+                # Fallback: пробуем без since
+                trades = await self.exchange.fetch_my_trades(symbol, limit=5)
+                if trades:
+                    exit_price = float(trades[-1].get('price', position.entry_price))
         except Exception as e:
             logger.warning(f'Ошибка получения истории сделок: {e}')
 
@@ -1693,8 +1715,12 @@ class SmartMoneyBot:
         )
         self._balance_cache_time = 0
 
-        # ФОРМАТИРОВАНИЕ ОБЪЕДИНЕННОГО СООБЩЕНИЯ
+        # ФОРМАТИРОВАНИЕ ЕДИНОГО СООБЩЕНИЯ (без дублей)
         emoji = "✅" if total_pnl >= 0 else "❌"
+        duration = datetime.now(timezone.utc) - position.timestamp
+        hours = int(duration.total_seconds() // 3600)
+        minutes = int((duration.total_seconds() % 3600) // 60)
+        
         if reason:
             parts = reason.split('\n', 1)
             title = parts[0]
@@ -1711,6 +1737,7 @@ class SmartMoneyBot:
             f"💰 Вложено: ${margin:.2f}\n"
             f"📈 REAL PnL: {'+' if total_pnl >= 0 else ''}${total_pnl:.2f}\n"
             f"📊 REAL ROE: {'+' if pnl_pct >= 0 else ''}{pnl_pct:.1f}%\n"
+            f"⏱ Время: {hours}ч {minutes}мин\n"
             f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
             f"SMART MONEY 1 BOT"
         )
@@ -2041,7 +2068,8 @@ class SmartMoneyBot:
 
                     pair = position.symbol.replace('/USDT', '')
 
-                    # Программный STOP LOSS
+                    # Программный STOP LOSS — передаём reason в close_position
+                    # НЕ отправляем отдельное сообщение здесь (close_position отправит единое)
                     is_sl_hit = False
                     if position.side == 'LONG' and current_price <= position.stop_loss:
                         is_sl_hit = True
@@ -2049,14 +2077,12 @@ class SmartMoneyBot:
                         is_sl_hit = True
 
                     if is_sl_hit:
-                        message = (
-                            f"❌ STOP LOSS | {pair}\n"
+                        sl_reason = (
+                            f"❌ STOP LOSS\n"
                             f"Убыток по ROE: {pnl_pct:+.1f}%\n"
-                            f"💰 Вложено: ${position.amount_usdt:.2f}\n"
                             f"Текущий PnL: {'+' if pnl_usd >= 0 else ''}${pnl_usd:.2f}"
                         )
-                        await self.send_telegram_message(message)
-                        await self.close_position(position_id)
+                        await self.close_position(position_id, reason=sl_reason)
                         continue
 
                     # Trailing Stop
@@ -2071,15 +2097,14 @@ class SmartMoneyBot:
 
                         trailing_drawdown = position.trailing_peak - pnl_pct
                         if trailing_drawdown >= config.TRAILING_DRAWDOWN_CLOSE_PCT:
-                            message = (
-                                f"🛡 TRAILING STOP | {pair}\n"
+                            trail_reason = (
+                                f"🛡 TRAILING STOP\n"
                                 f"Пик: +{position.trailing_peak:.1f}%\n"
                                 f"Откат: {trailing_drawdown:.1f}%\n"
                                 f"Фактический ROE: {pnl_pct:+.1f}%\n"
                                 f"PnL: {'+' if pnl_usd >= 0 else ''}${pnl_usd:.2f}"
                             )
-                            await self.send_telegram_message(message)
-                            await self.close_position(position_id)
+                            await self.close_position(position_id, reason=trail_reason)
                             continue
 
                     # FIX #10: проверяем флаги ДО вызова close_partial — флаг ставим сразу
@@ -2179,11 +2204,11 @@ class SmartMoneyBot:
                 f"MOMENTUM EXIT: {position.symbol} | "
                 f"{duration_minutes:.1f}m | PNL={pnl_pct:.2f}%"
             )
-            await self.send_telegram_message(
-                f"⚠️ Weak momentum exit: {position.symbol}\n"
+            momentum_reason = (
+                f"⚠️ MOMENTUM EXIT\n"
                 f"Возраст: {duration_minutes:.0f} мин\nPNL: {pnl_pct:.2f}%"
             )
-            await self.close_position(position.id)
+            await self.close_position(position.id, reason=momentum_reason)
 
         except Exception as e:
             logger.error(f"Ошибка timeout-проверки: {e}")
