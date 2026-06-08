@@ -1315,9 +1315,14 @@ class SmartMoneyBot:
             # 1. Считаем виртуальный капитал
             stats = self.db.get_all_statistics()
             total_pnl = float(stats.get('total_pnl') or 0.0)
-            
+
+            # 🔥 ИСПРАВЛЕНИЕ: Вытягиваем зафиксированную прибыль по еще открытым позициям (TP1, TP2)
+            floating_realized_pnl = sum(max(0, p.realized_pnl_usd) for p in self.positions.values())
+            total_pnl += floating_realized_pnl
+
             # Если реинвест включен, прибавляем профит к депо
             if config.REINVEST_PROFITS and total_pnl > 0:
+
                 virtual_equity = config.DEPOSIT + total_pnl
             else:
                 # Если выключен или убыток - отталкиваемся от депо/убытка (но не ниже 50% депо)
@@ -1667,30 +1672,41 @@ class SmartMoneyBot:
         symbol = position.symbol
         logger.info(f"Позиция {symbol} закрыта на Binance (по SL/TP или вручную)")
         
-        exit_price = position.entry_price
+        exit_price = 0.0
         try:
-            # FIX: Ищем трейды ПОСЛЕ открытия позиции, чтобы не взять трейд открытия
-            since_ms = int(position.timestamp.timestamp() * 1000) + 1000  # +1 сек после открытия
-            trades = await self.exchange.fetch_my_trades(symbol, since=since_ms, limit=20)
+            close_side = 'sell' if position.side == 'LONG' else 'buy'
             
-            if trades:
-                # Берём последний трейд — это трейд закрытия
-                # Дополнительная проверка: трейд должен быть в противоположном направлении
-                close_side = 'sell' if position.side == 'LONG' else 'buy'
-                closing_trades = [t for t in trades if t.get('side', '').lower() == close_side]
-                
-                if closing_trades:
-                    exit_price = float(closing_trades[-1].get('price', position.entry_price))
-                else:
-                    # Если не нашли по стороне, берём последний трейд
-                    exit_price = float(trades[-1].get('price', position.entry_price))
+            # Ищем конкретно исполненный ордер (SL/TP), который закрыл позицию
+            closed_orders = await self.exchange.fetch_closed_orders(symbol, limit=10)
+            
+            valid_orders = [
+                o for o in closed_orders 
+                if o.get('side', '').lower() == close_side 
+                and o.get('timestamp', 0) >= position.timestamp.timestamp() * 1000
+                and float(o.get('filled', 0)) > 0
+            ]
+            
+            if valid_orders:
+                last_order = valid_orders[-1]
+                exit_price = float(last_order.get('average') or last_order.get('price') or 0.0)
             else:
-                # Fallback: пробуем без since
-                trades = await self.exchange.fetch_my_trades(symbol, limit=5)
+                # Резервный запрос через трейды
+                since_ms = int(position.timestamp.timestamp() * 1000) + 1000
+                trades = await self.exchange.fetch_my_trades(symbol, since=since_ms, limit=10)
                 if trades:
-                    exit_price = float(trades[-1].get('price', position.entry_price))
+                    closing_trades = [t for t in trades if t.get('side', '').lower() == close_side]
+                    if closing_trades:
+                        exit_price = float(closing_trades[-1].get('price', 0.0))
+                    else:
+                        exit_price = float(trades[-1].get('price', 0.0))
         except Exception as e:
-            logger.warning(f'Ошибка получения истории сделок: {e}')
+            logger.warning(f'Ошибка получения истории исполнения: {e}')
+
+        # Финальная защита от нулевой цены
+        if exit_price <= 0:
+            logger.error(f"КРИТИЧЕСКАЯ ОШИБКА: Не удалось найти реальную цену выхода для {symbol}.")
+            exit_price = position.entry_price
+
 
         # 1. Считаем PnL ТОЛЬКО для оставшегося хвостика по точной цене выхода
         qty = position.remaining_quantity
@@ -1804,14 +1820,36 @@ class SmartMoneyBot:
             except Exception as cancel_e:
                 logger.warning(f"Не удалось отменить ордера для {symbol}: {cancel_e}")
 
-            exit_price = order.get('average') or order.get('price')
-            if not exit_price:
+            # Истинное исправление: дожидаемся реальной цены исполнения
+            exit_price = float(order.get('average') or 0.0)
+            
+            if exit_price <= 0 and 'id' in order:
                 try:
-                    ticker = await self.exchange.fetch_ticker(symbol)
-                    exit_price = ticker['last']
+                    await asyncio.sleep(0.5)
+                    fetched_order = await self.exchange.fetch_order(order['id'], symbol)
+                    exit_price = float(fetched_order.get('average') or fetched_order.get('price') or 0.0)
+                except Exception as e:
+                    logger.warning(f"Не удалось получить детали ордера {order['id']}: {e}")
+
+            if exit_price <= 0:
+                try:
+                    closed = await self.exchange.fetch_closed_orders(symbol, limit=5)
+                    if closed:
+                        exit_price = float(closed[-1].get('average') or closed[-1].get('price') or 0.0)
                 except Exception:
-                    exit_price = position.entry_price
+                    pass
+            
+            # --- ДОБАВЬ ВОТ ЭТИ ТРИ СТРОЧКИ СЮДА ---
+            if exit_price <= 0:
+                logger.error(f"exit_price=0 для {symbol}. Ставим цену входа, чтобы избежать бага.")
+                exit_price = position.entry_price
+            # --------------------------------------
+            
             exit_price = float(exit_price)
+
+            
+            exit_price = float(exit_price)
+
 
             if position.side == 'SHORT':
                 leg_pnl = (position.entry_price - exit_price) * qty_close
@@ -3107,11 +3145,11 @@ async def main():
 
     config.DEPOSIT = 50.0
     config.ENTRY_AMOUNT = 50.0
-    config.LEVERAGE = 75
+    config.LEVERAGE = 50
     config.STOP_LOSS_PCT = 1.5
     config.REINVEST_PROFITS = True
     config.DRAWDOWN_ALERT = 12.0
-    config.MAX_CONCURRENT_POSITIONS = 4
+    config.MAX_CONCURRENT_POSITIONS = 20
     config.MAX_SESSION_LOSS_PCT = 30.0
     config.FILL_THRESHOLD = 0.90
 
