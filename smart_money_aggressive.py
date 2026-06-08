@@ -1948,10 +1948,14 @@ class SmartMoneyBot:
             fee = qty_to_close * executed_price * config.TAKER_FEE
             chunk_pnl -= fee
 
-            position.realized_pnl_usd += chunk_pnl
+                        position.realized_pnl_usd += chunk_pnl
             position.remaining_quantity = max(0.0, position.remaining_quantity - qty_to_close)
+            
+            # Корректируем заблокированную маржу пропорционально закрытому объему
+
 
             logger.info(
+
                 f"Частичное закрытие {position.symbol}: "
                 f"{qty_to_close} @ {executed_price:.5f}, "
                 f"chunk_pnl=${chunk_pnl:.4f}, fee=${fee:.4f}, "
@@ -1979,6 +1983,43 @@ class SmartMoneyBot:
             qty_rounded = float(self.exchange.amount_to_precision(position.symbol, position.remaining_quantity))
             if qty_rounded <= 0:
                 return
+
+            close_side = 'BUY' if position.side == 'SHORT' else 'SELL'
+            
+            # Делаем 3 попытки, если биржа глючит (Testnet этим славится)
+            for attempt in range(3):
+                try:
+                    open_orders = await self.exchange.fetch_open_orders(position.symbol)
+                    for ord in open_orders:
+                        if 'stop' in ord.get('type', '').lower():
+                            await self.exchange.cancel_order(ord['id'], position.symbol)
+                            
+                    await self.exchange.create_order(
+                        symbol=position.symbol,
+                        type='STOP_MARKET',
+                        side=close_side,
+                        amount=qty_rounded,
+                        params={'stopPrice': new_sl_price, 'reduceOnly': True}
+                    )
+                    position.stop_loss = new_sl_price
+                    logger.info(f"SL обновлён {position.symbol}: → {new_sl_price}")
+                    return  # Успех, выходим из функции
+                except Exception as e:
+                    logger.warning(f"Попытка {attempt+1}/3: Ошибка переноса SL для {position.symbol}: {e}")
+                    await asyncio.sleep(2)  # Ждем 2 секунды перед повтором
+            
+            # Если дошли сюда, значит все 3 попытки провалились
+            error_msg = (
+                f"⚠️ КРИТИЧЕСКАЯ ОШИБКА БИРЖИ\n"
+                f"Не удалось перенести SL в безубыток для #{position.symbol.replace('/USDT', '')} "
+                f"после 3 попыток!\nПозиция под угрозой старого стопа."
+            )
+            logger.error(error_msg)
+            await self.send_telegram_message(error_msg)
+
+        except Exception as e:
+            logger.error(f"Глобальная ошибка в _update_exchange_sl для {position.symbol}: {e}")
+
 
             try:
                 # Получаем активные ордера и отменяем ТОЛЬКО стоп-лосс, оставляя Take Profit
@@ -2173,27 +2214,40 @@ class SmartMoneyBot:
 
 
                     # TP2
-                    if pnl_pct >= config.PARTIAL_TP2_PCT and not position.partial_tp2_done:
+                    # TP2
+                    is_tp2_hit = False
+                    if position.side == 'LONG' and current_price >= position.tp2_price:
+                        is_tp2_hit = True
+                    elif position.side == 'SHORT' and current_price <= position.tp2_price:
+                        is_tp2_hit = True
+
+                    if is_tp2_hit and not position.partial_tp2_done:
                         position.partial_tp2_done = True
                         await self.close_partial_position(position, position.remaining_quantity * 0.50, current_price)
                         new_sl = (position.entry_price * (1 - 0.009)
                                   if position.side == 'SHORT'
                                   else position.entry_price * (1 + 0.009))
                         await self._update_exchange_sl(position, new_sl)
-                        
-                        # ✅ ИСПРАВЛЕНИЕ: Следующий ордер на бирже переносим на уровень TP3!
                         await self._update_exchange_tp(position, position.tp3_price)
                         
                         await self.send_telegram_message(
-                            f"🚀 TP2 | {pair}\n+{config.PARTIAL_TP2_PCT:.0f}% ROE — закрыто ещё 30% | SL → +40% ROE"
+                            f"🚀 TP2 | {pair}\nДостигнута вторая цель! Закрыто ещё 30% | SL → +40% ROE"
                         )
 
 
 
+
                     # TP3
-                    if pnl_pct >= config.PARTIAL_TP3_PCT and not position.partial_tp3_done:
+                    # TP3
+                    is_tp3_hit = False
+                    if position.side == 'LONG' and current_price >= position.tp3_price:
+                        is_tp3_hit = True
+                    elif position.side == 'SHORT' and current_price <= position.tp3_price:
+                        is_tp3_hit = True
+
+                    if is_tp3_hit and not position.partial_tp3_done:
                         position.partial_tp3_done = True  # Ставим флаг ДО async операции
-                        
+
                         # ✅ ИСПРАВЛЕНИЕ: считаем 10% от ПЕРВОНАЧАЛЬНОГО объёма
                         runner_qty = position.quantity * 0.10
                         # Защита: runner не может быть больше remaining
@@ -2911,8 +2965,9 @@ class SmartMoneyBot:
                     logger.warning(f"Не удалось установить меню: {e}")
     
                 self.app = app
-                await app.initialize()
+                # await app.initialize()  <-- Убрали дублирование
                 await app.start()
+
                 await app.updater.start_polling(
                     allowed_updates=Update.ALL_TYPES,
                     drop_pending_updates=True
@@ -3019,8 +3074,18 @@ class SmartMoneyBot:
                         elif 'take_profit' in o_type:
                             tp_price = float(ord.get('stopPrice') or ord.get('price') or tp_price)
 
+                    # Подтягиваем оригинальный ID и объем из БД
+                    db_id = int(saved_pos.get('id', int(datetime.now().timestamp() * 1000) + restored_count))
+                    original_qty = float(saved_pos.get('quantity', abs(contracts)))
+                    current_qty = abs(contracts)
+                    
+                    # Восстанавливаем флаги частичных закрытий
+                    tp1_done = current_qty <= original_qty * 0.65  # Осталось <= 60% (учел погрешность)
+                    tp2_done = current_qty <= original_qty * 0.35  # Осталось <= 30%
+                    tp3_done = current_qty <= original_qty * 0.15  # Осталось <= 10%
+
                     pos = Position(
-                        id=int(datetime.now().timestamp() * 1000) + restored_count,
+                        id=db_id,
                         symbol=symbol,
                         side=side,
                         entry_price=entry_price,
@@ -3028,11 +3093,15 @@ class SmartMoneyBot:
                         take_profit=tp_price,
                         amount_usdt=amount_usdt,
                         leverage=leverage,
-                        quantity=abs(contracts),
-                        remaining_quantity=abs(contracts),
+                        quantity=original_qty,
+                        remaining_quantity=current_qty,
                         timestamp=datetime.now(timezone.utc),
-                        realized_pnl_usd=float(ep.get('realizedPnl', 0))
+                        realized_pnl_usd=float(ep.get('realizedPnl', 0)),
+                        partial_tp1_done=tp1_done,
+                        partial_tp2_done=tp2_done,
+                        partial_tp3_done=tp3_done
                     )
+
                     self.positions[pos.id] = pos
                     restored_count += 1
 
