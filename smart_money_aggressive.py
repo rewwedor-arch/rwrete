@@ -1013,11 +1013,11 @@ class SMCAnalyzer:
             # === СТРУКТУРНОЕ ПОДТВЕРЖДЕНИЕ: BOS ИЛИ SMC-зона (FVG/OB) ===
             # Нужен хотя бы один SMC элемент: BOS/CHoCH ИЛИ (FVG/OB)
             if long_score >= short_score and long_score >= config.MIN_INDICATORS_SCORE:
-            # Для ЛОНГА
-            has_smc = (
-                long_ind.get('bos') and
-                (long_ind.get('fvg') or long_ind.get('ob'))
-            )
+                # Для ЛОНГА
+                has_smc = (
+                    long_ind.get('bos') and
+                    (long_ind.get('fvg') or long_ind.get('ob'))
+                )
 
                 if not has_smc:
                     logger.info(f"{symbol}: Лонг {long_score} баллов, но нет SMC подтверждения (BOS/FVG/OB)")
@@ -1032,11 +1032,11 @@ class SMCAnalyzer:
                     result['signal'] = True
 
             elif short_score > long_score and short_score >= config.MIN_INDICATORS_SCORE:
-            # Для ШОРТА
-            has_smc = (
-                short_ind.get('bos') and
-                (short_ind.get('fvg') or short_ind.get('ob'))
-            )
+                # Для ШОРТА
+                has_smc = (
+                    short_ind.get('bos') and
+                    (short_ind.get('fvg') or short_ind.get('ob'))
+                )
 
                 if not has_smc:
                     logger.info(f"{symbol}: Шорт {short_score} баллов, но нет SMC подтверждения (BOS/FVG/OB)")
@@ -1053,6 +1053,7 @@ class SMCAnalyzer:
                 result['score'] = max(long_score, short_score)
                 result['direction'] = 'LONG' if long_score >= short_score else 'SHORT'
                 result['indicators'] = long_ind if long_score >= short_score else short_ind
+
 
         except Exception as e:
             logger.error(f"Ошибка анализа {symbol}: {e}")
