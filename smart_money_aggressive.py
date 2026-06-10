@@ -920,15 +920,18 @@ class SMCAnalyzer:
                     short_ind['ema50_trend'] = True
 
             # 4. RSI (зона 40-60 + импульс в направлении)
+            # 4. RSI (зона трендового импульса)
             rsi = self.calculate_rsi(closes_5m, 14)
             if rsi and len(rsi) >= 2:
                 result['rsi'] = rsi[-1]
-                if 40 <= rsi[-1] <= 60 and rsi[-1] > rsi[-2]:
+                # Ищем импульс в зоне тренда, а не во флэте
+                if 50 <= rsi[-1] <= 70 and rsi[-1] > rsi[-2]:
                     long_score += 1
                     long_ind['rsi_momentum'] = True
-                if 40 <= rsi[-1] <= 60 and rsi[-1] < rsi[-2]:
+                if 30 <= rsi[-1] <= 50 and rsi[-1] < rsi[-2]:
                     short_score += 1
                     short_ind['rsi_momentum'] = True
+
 
             # 5. ADX (минимум 25 — начало тренда)
             adx = self.calculate_adx(highs_5m, lows_5m, closes_5m, 14)
@@ -1690,6 +1693,8 @@ class SmartMoneyBot:
             ]
             
             if valid_orders:
+                # Надежная сортировка по времени: самый свежий ордер точно будет последним [-1]
+                valid_orders.sort(key=lambda x: x.get('timestamp', 0))
                 last_order = valid_orders[-1]
                 exit_price = float(last_order.get('average') or last_order.get('price') or 0.0)
             else:
@@ -1699,8 +1704,10 @@ class SmartMoneyBot:
                 if trades:
                     closing_trades = [t for t in trades if t.get('side', '').lower() == close_side]
                     if closing_trades:
+                        closing_trades.sort(key=lambda x: x.get('timestamp', 0))
                         exit_price = float(closing_trades[-1].get('price', 0.0))
                     else:
+                        trades.sort(key=lambda x: x.get('timestamp', 0))
                         exit_price = float(trades[-1].get('price', 0.0))
         except Exception as e:
             logger.warning(f'Ошибка получения истории исполнения: {e}')
@@ -1975,8 +1982,9 @@ class SmartMoneyBot:
             # ЗАЩИТА ОТ "ПОЗИЦИЙ-ПРИЗРАКОВ"
             if '-2022' in error_text or 'ReduceOnly' in error_text or 'insufficient margin' in error_text.lower():
                 logger.warning(f"👻 {position.symbol} была закрыта биржей за нашей спиной! Финализируем...")
-                # Даем боту пинок, чтобы он немедленно осознал реальность и запросил историю
-                asyncio.create_task(self.close_position(position.id, reason="👻 ПОЗИЦИЯ ЗАКРЫТА БИРЖЕЙ\nБот выявил закрытие по SL/TP."))
+                # Ждем финального закрытия (без create_task), чтобы корректно рассчитать PnL
+                await self.close_position(position.id, reason="👻 ПОЗИЦИЯ ЗАКРЫТА БИРЖЕЙ\nБот выявил закрытие по SL/TP.")
+
             
             return False
 
@@ -2176,24 +2184,26 @@ class SmartMoneyBot:
                         is_tp1_hit = True
 
                     # TP1 (ATR)
+                    # TP1 (ATR)
                     if is_tp1_hit and not position.partial_tp1_done:
                         position.partial_tp1_done = True
-                        await self.close_partial_position(position, position.quantity * 0.40, current_price)
-                        new_sl = (position.entry_price * (1 - 0.003)
-                                  if position.side == 'SHORT'
-                                  else position.entry_price * (1 + 0.003))
-                        await self._update_exchange_sl(position, new_sl)
-                        
-                        # ✅ ИСПРАВЛЕНИЕ: Следующий ордер на бирже должен стоять на уровне TP2!
-                        await self._update_exchange_tp(position, position.tp2_price)
-                        
-                        await self.send_telegram_message(
-                            f"💰 ЧАСТИЧНАЯ ФИКСАЦИЯ TP1 (ATR) | {pair}\n"
-                            f"Достигнута цель по волатильности! Закрыто 40% | SL → безубыток"
-                        )
+                        is_success = await self.close_partial_position(position, position.quantity * 0.40, current_price)
+                        if is_success:
+                            new_sl = (position.entry_price * (1 - 0.003)
+                                      if position.side == 'SHORT'
+                                      else position.entry_price * (1 + 0.003))
+                            await self._update_exchange_sl(position, new_sl)
+                            await self._update_exchange_tp(position, position.tp2_price)
+                            
+                            await self.send_telegram_message(
+                                f"💰 ЧАСТИЧНАЯ ФИКСАЦИЯ TP1 (ATR) | {pair}\n"
+                                f"Достигнута цель по волатильности! Закрыто 40% | SL → безубыток"
+                            )
 
 
 
+
+                    # TP2
                     # TP2
                     # TP2
                     is_tp2_hit = False
@@ -2204,20 +2214,23 @@ class SmartMoneyBot:
 
                     if is_tp2_hit and not position.partial_tp2_done:
                         position.partial_tp2_done = True
-                        await self.close_partial_position(position, position.remaining_quantity * 0.50, current_price)
-                        new_sl = (position.entry_price * (1 - 0.009)
-                                  if position.side == 'SHORT'
-                                  else position.entry_price * (1 + 0.009))
-                        await self._update_exchange_sl(position, new_sl)
-                        await self._update_exchange_tp(position, position.tp3_price)
-                        
-                        await self.send_telegram_message(
-                            f"🚀 TP2 | {pair}\nДостигнута вторая цель! Закрыто ещё 30% | SL → +40% ROE"
-                        )
+                        is_success = await self.close_partial_position(position, position.remaining_quantity * 0.50, current_price)
+                        if is_success:
+                            new_sl = (position.entry_price * (1 - 0.009)
+                                      if position.side == 'SHORT'
+                                      else position.entry_price * (1 + 0.009))
+                            await self._update_exchange_sl(position, new_sl)
+                            await self._update_exchange_tp(position, position.tp3_price)
+                            
+                            await self.send_telegram_message(
+                                f"🚀 TP2 | {pair}\nДостигнута вторая цель! Закрыто ещё 30% | SL → +40% ROE"
+                            )
 
 
 
 
+
+                    # TP3
                     # TP3
                     # TP3
                     is_tp3_hit = False
@@ -2227,32 +2240,29 @@ class SmartMoneyBot:
                         is_tp3_hit = True
 
                     if is_tp3_hit and not position.partial_tp3_done:
-                        position.partial_tp3_done = True  # Ставим флаг ДО async операции
+                        position.partial_tp3_done = True 
 
-                        # ✅ ИСПРАВЛЕНИЕ: считаем 10% от ПЕРВОНАЧАЛЬНОГО объёма
                         runner_qty = position.quantity * 0.10
-                        # Защита: runner не может быть больше remaining
                         runner_qty = min(runner_qty, position.remaining_quantity)
                         close_qty = position.remaining_quantity - runner_qty
                         
                         if close_qty > 0:
-                            await self.close_partial_position(position, close_qty, current_price)
-                        
-                        new_sl = (position.entry_price * (1 - 0.018)
-                                  if position.side == 'SHORT'
-                                  else position.entry_price * (1 + 0.018))
-                        await self._update_exchange_sl(position, new_sl)
-                        
-                        # ✅ ОБНОВЛЯЕМ TP-ордер на бирже под оставшийся объём (10%)
-                        await self._update_exchange_tp(position, position.tp3_price)
-                        
-                        await self.send_telegram_message(
-                            f"💎 TP3 +{config.PARTIAL_TP3_PCT:.0f}% ROE | {pair}\n"
-                            f"Закрыто 90% позиции!\n"
-                            f"🎯 Оставлен раннер 10% с трейлинг-стопом"
-                        )
-                        position.trailing_active = True
-                        position.trailing_peak = pnl_pct
+                            is_success = await self.close_partial_position(position, close_qty, current_price)
+                            if is_success:
+                                new_sl = (position.entry_price * (1 - 0.018)
+                                          if position.side == 'SHORT'
+                                          else position.entry_price * (1 + 0.018))
+                                await self._update_exchange_sl(position, new_sl)
+                                await self._update_exchange_tp(position, position.tp3_price)
+                                
+                                await self.send_telegram_message(
+                                    f"💎 TP3 +{config.PARTIAL_TP3_PCT:.0f}% ROE | {pair}\n"
+                                    f"Закрыто 90% позиции!\n"
+                                    f"🎯 Оставлен раннер 10% с трейлинг-стопом"
+                                )
+                                position.trailing_active = True
+                                position.trailing_peak = pnl_pct
+
 
 
                 except Exception as e:
@@ -3206,7 +3216,7 @@ async def main():
     config.DEPOSIT = 50.0
     config.ENTRY_AMOUNT = 50.0
     config.LEVERAGE = 50
-    config.STOP_LOSS_PCT = 1.5
+    config.STOP_LOSS_PCT = 2.0
     config.REINVEST_PROFITS = True
     config.DRAWDOWN_ALERT = 12.0
     config.MAX_CONCURRENT_POSITIONS = 20
