@@ -113,7 +113,7 @@ class StrategyConfig:
 
 
     # Параметры сигналов
-    MIN_INDICATORS_SCORE: int = 3
+    MIN_INDICATORS_SCORE: int = 4
     TOTAL_INDICATORS: int = 8
 
     # Таймфреймы
@@ -1013,11 +1013,12 @@ class SMCAnalyzer:
             # === СТРУКТУРНОЕ ПОДТВЕРЖДЕНИЕ: BOS ИЛИ SMC-зона (FVG/OB) ===
             # Нужен хотя бы один SMC элемент: BOS/CHoCH ИЛИ (FVG/OB)
             if long_score >= short_score and long_score >= config.MIN_INDICATORS_SCORE:
-                has_smc = (
-                    long_ind.get('bos') or
-                    long_ind.get('fvg') or
-                    long_ind.get('ob')
-                )
+            # Для ЛОНГА
+            has_smc = (
+                long_ind.get('bos') and
+                (long_ind.get('fvg') or long_ind.get('ob'))
+            )
+
                 if not has_smc:
                     logger.info(f"{symbol}: Лонг {long_score} баллов, но нет SMC подтверждения (BOS/FVG/OB)")
                     result['score'] = long_score
@@ -1031,11 +1032,12 @@ class SMCAnalyzer:
                     result['signal'] = True
 
             elif short_score > long_score and short_score >= config.MIN_INDICATORS_SCORE:
-                has_smc = (
-                    short_ind.get('bos') or
-                    short_ind.get('fvg') or
-                    short_ind.get('ob')
-                )
+            # Для ШОРТА
+            has_smc = (
+                short_ind.get('bos') and
+                (short_ind.get('fvg') or short_ind.get('ob'))
+            )
+
                 if not has_smc:
                     logger.info(f"{symbol}: Шорт {short_score} баллов, но нет SMC подтверждения (BOS/FVG/OB)")
                     result['score'] = short_score
