@@ -1147,19 +1147,9 @@ class SMCAnalyzer:
                 imbalance = await self.analyze_order_book(symbol)
                 result['order_book_imbalance'] = imbalance
 
-                if result['direction'] == 'LONG' and imbalance < 0.8:
-                    logger.info(
-                        f"{symbol}: ЛОНГ отменён — давление продавцов в стакане "
-                        f"(imbalance={imbalance:.3f} < 0.8)"
-                    )
-                    result['signal'] = False
-                elif result['direction'] == 'SHORT' and imbalance > 1.2:
-                    logger.info(
-                        f"{symbol}: ШОРТ отменён — давление покупателей в стакане "
-                        f"(imbalance={imbalance:.3f} > 1.2)"
-                    )
-                    result['signal'] = False
-
+                # Раньше тут стоял ручной фильтр по стакану. 
+                # Теперь мы передаем эти данные в ML-модель, и она сама решает,
+                # блокировать сделку или нет, учитывая все остальные факторы!
             # === ФИЧА 3: FEATURES DICT ДЛЯ ML ===
             ema200_dist_pct = 0.0
             if result.get('ema200') and result['ema200'] > 0:
@@ -1601,8 +1591,8 @@ class SmartMoneyBot:
                     ]
                     prob = self.ml_model.predict_proba([features])[0][1]
                     
-                    if prob < 0.65:
-                        logger.info(f"Сигнал {symbol} отменен ИИ: вероятность успеха {prob*100:.1f}% < 65%")
+                    if prob < 0.50:
+                        logger.info(f"Сигнал {symbol} отменен ИИ: вероятность успеха {prob*100:.1f}% < 50%")
                         return None
                     
                     ai_prob_str = f"🧠 AI Уверенность: {prob*100:.1f}%\n"
