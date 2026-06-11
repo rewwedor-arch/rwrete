@@ -113,7 +113,7 @@ class StrategyConfig:
 
 
     # Параметры сигналов
-    MIN_INDICATORS_SCORE: int = 4
+    MIN_INDICATORS_SCORE: int = 3
     TOTAL_INDICATORS: int = 8
 
     # Таймфреймы
@@ -1103,7 +1103,7 @@ class SMCAnalyzer:
             if long_score >= short_score and long_score >= config.MIN_INDICATORS_SCORE:
                 # Для ЛОНГА
                 has_smc = (
-                    long_ind.get('bos') and
+                    long_ind.get('bos') or
                     (long_ind.get('fvg') or long_ind.get('ob'))
                 )
 
@@ -1122,7 +1122,7 @@ class SMCAnalyzer:
             elif short_score > long_score and short_score >= config.MIN_INDICATORS_SCORE:
                 # Для ШОРТА
                 has_smc = (
-                    short_ind.get('bos') and
+                    short_ind.get('bos') or
                     (short_ind.get('fvg') or short_ind.get('ob'))
                 )
 
