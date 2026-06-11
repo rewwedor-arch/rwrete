@@ -113,7 +113,7 @@ class StrategyConfig:
 
 
     # Параметры сигналов
-    MIN_INDICATORS_SCORE: int = 3
+    MIN_INDICATORS_SCORE: int = 4
     TOTAL_INDICATORS: int = 8
 
     # Таймфреймы
@@ -1103,7 +1103,7 @@ class SMCAnalyzer:
             if long_score >= short_score and long_score >= config.MIN_INDICATORS_SCORE:
                 # Для ЛОНГА
                 has_smc = (
-                    long_ind.get('bos') or
+                    long_ind.get('bos') and
                     (long_ind.get('fvg') or long_ind.get('ob'))
                 )
 
@@ -1122,7 +1122,7 @@ class SMCAnalyzer:
             elif short_score > long_score and short_score >= config.MIN_INDICATORS_SCORE:
                 # Для ШОРТА
                 has_smc = (
-                    short_ind.get('bos') or
+                    short_ind.get('bos') and
                     (short_ind.get('fvg') or short_ind.get('ob'))
                 )
 
@@ -1263,6 +1263,21 @@ class SmartMoneyBot:
         self.db = Database()
         self.smc_analyzer = SMCAnalyzer(self.exchange)
         self.positions: Dict[int, Position] = {}
+        
+        # Загрузка ML модели
+        self.ml_model = None
+        try:
+            import joblib
+            import os
+            if os.path.exists('trade_model.pkl'):
+                self.ml_model = joblib.load('trade_model.pkl')
+                logger.info("🧠 ML Модель 'trade_model.pkl' успешно загружена!")
+            else:
+                logger.warning("Файл 'trade_model.pkl' не найден, бот работает без ML-фильтра.")
+        except ImportError:
+            logger.warning("Библиотека joblib не установлена, бот работает без ML-фильтра.")
+        except Exception as e:
+            logger.warning(f"Ошибка загрузки ML модели: {e}")
 
         self._opening_symbols: set = set()
         self._scan_lock = asyncio.Lock()
@@ -1430,8 +1445,7 @@ class SmartMoneyBot:
             except Exception as e:
                 logger.warning(f"Не удалось обновить кэш баланса: {e}")
         return self._cached_real_balance
-
-    async def calculate_position_size(self, entry_price: float, score: int = 5) -> tuple:
+    async def calculate_position_size(self, entry_price: float, score: int = 5, risk_multiplier: float = 1.0) -> tuple:
         """
         FIX #12: virtual_equity теперь ограничивается реальным балансом биржи.
         Это предотвращает ситуацию когда бот "думает" что у него $50 виртуально,
@@ -1490,9 +1504,10 @@ class SmartMoneyBot:
             # === ПРОЦЕНТ НА ПОЗИЦИЮ ===
             amount_per_slot = virtual_free / remaining_slots
             weight = min(max(score, config.MIN_INDICATORS_SCORE) / 5.0, 1.5)
-            amount_usdt = amount_per_slot * weight
+            amount_usdt = amount_per_slot * weight * risk_multiplier
 
-            max_single_position = virtual_equity * 0.30
+            # Ограничиваем максимальную сделку до 20% от виртуального депозита (а не 30%, чтобы было безопаснее)
+            max_single_position = virtual_equity * 0.20
             amount_usdt = min(amount_usdt, virtual_free, max_single_position)
 
             if amount_usdt < config.MIN_SLOT_USDT:
@@ -1568,12 +1583,44 @@ class SmartMoneyBot:
 
         try:
             direction = smc_result.get('direction', 'LONG')
+            
+            # --- ФИЧА: Адаптивный Риск-менеджмент на основе ИИ ---
+            ai_prob_str = ""
+            risk_mult = 1.0
+            if self.ml_model is not None:
+                try:
+                    f_dict = smc_result.get('features_dict', {})
+                    side_bin = 1 if direction == 'LONG' else 0
+                    features = [
+                        f_dict.get('rsi', 0.0),
+                        f_dict.get('adx', 0.0),
+                        f_dict.get('ema200_dist_pct', 0.0),
+                        f_dict.get('order_book_imbalance', 1.0),
+                        f_dict.get('fear_greed_index', 50),
+                        side_bin
+                    ]
+                    prob = self.ml_model.predict_proba([features])[0][1]
+                    
+                    if prob < 0.65:
+                        logger.info(f"Сигнал {symbol} отменен ИИ: вероятность успеха {prob*100:.1f}% < 65%")
+                        return None
+                    
+                    ai_prob_str = f"🧠 AI Уверенность: {prob*100:.1f}%\n"
+                    
+                    if prob >= 0.80:
+                        logger.info(f"{symbol}: Высокая уверенность ИИ ({prob*100:.1f}%) -> Применяем risk_multiplier x1.5")
+                        risk_mult = 1.5
+                except Exception as e:
+                    logger.warning(f"Ошибка предсказания ML модели: {e}")
+            # ------------------------
+
             market_info = self.exchange.market(symbol)
             min_notional = float(market_info.get('limits', {}).get('cost', {}).get('min', 5))
 
             quantity, margin, actual_amount = await self.calculate_position_size(
-                entry_price, score=smc_result['score']
+                entry_price, score=smc_result['score'], risk_multiplier=risk_mult
             )
+
             if quantity == 0:
                 logger.warning(f"Недостаточно средств для {symbol}")
                 return None
@@ -1781,6 +1828,7 @@ class SmartMoneyBot:
                 f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"
                 f"{dir_emoji} | #{symbol.replace('/', '')}\n"
                 f"〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n\n"
+                f"{ai_prob_str}"
                 f"🛒 Вход:   {actual_entry:.5f}\n"
                 f"💰 Вложено: ${actual_margin:.2f}\n"
                 f"🎯 TP1:    {tp1_price:.5f}\n"
