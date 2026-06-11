@@ -170,12 +170,17 @@ config = StrategyConfig()
 # ПРЕДОХРАНИТЕЛЬ: НОВОСТНОЙ ФОН / НАСТРОЕНИЕ РЫНКА
 # ============================================================================
 ALLOW_TRADING = True
+ALLOW_LONG_ALTS = True   # Фича 2: блокировка ЛОНГОВ альткоинов при Extreme Fear
+FEAR_GREED_VALUE = 50    # Фича 3: глобальное значение для ML features
 
 
 async def check_fear_greed_index(bot: 'SmartMoneyBot'):
-    """Фоновая проверка Crypto Fear & Greed Index каждые 30 минут."""
-    global ALLOW_TRADING
-    return
+    """Фоновая проверка Crypto Fear & Greed Index каждые 30 минут.
+    При Extreme Fear (<25):
+      - ЛОНГИ по альткоинам ЗАПРЕЩЕНЫ
+      - ШОРТЫ по-прежнему РАЗРЕШЕНЫ
+    """
+    global ALLOW_TRADING, ALLOW_LONG_ALTS, FEAR_GREED_VALUE
     import aiohttp as _aiohttp
 
     while bot.is_running:
@@ -183,31 +188,33 @@ async def check_fear_greed_index(bot: 'SmartMoneyBot'):
             async with _aiohttp.ClientSession() as session:
                 async with session.get(
                     "https://api.alternative.me/fng/?limit=1",
-                    timeout=15
+                    timeout=_aiohttp.ClientTimeout(total=15)
                 ) as resp:
                     if resp.status == 200:
-                        data = await resp.json()
+                        data = await resp.json(content_type=None)
                         if data.get("data"):
                             entry = data["data"][0]
                             value = int(entry.get("value", 50))
                             classification = entry.get("value_classification", "Neutral")
+                            FEAR_GREED_VALUE = value
                             logger.info(f"Fear & Greed Index: {value} ({classification})")
 
-                            if value < 25 and ALLOW_TRADING:
-                                ALLOW_TRADING = False
+                            if value < 25 and ALLOW_LONG_ALTS:
+                                ALLOW_LONG_ALTS = False
                                 msg = (
-                                    f"⚠️ На рынке паника!\n"
+                                    f"⚠️ EXTREME FEAR!\n"
                                     f"Fear & Greed Index: {value} ({classification})\n"
-                                    f"Открытие новых сделок приостановлено."
+                                    f"🚫 ЛОНГИ по альткоинам ЗАПРЕЩЕНЫ\n"
+                                    f"✅ ШОРТЫ по-прежнему разрешены"
                                 )
                                 await bot.send_telegram_message(msg)
                                 logger.warning(msg)
-                            elif value >= 25 and not ALLOW_TRADING:
-                                ALLOW_TRADING = True
+                            elif value >= 25 and not ALLOW_LONG_ALTS:
+                                ALLOW_LONG_ALTS = True
                                 msg = (
                                     f"✅ Рынок успокоился.\n"
                                     f"Fear & Greed Index: {value} ({classification})\n"
-                                    f"Торговля возобновлена."
+                                    f"ЛОНГИ по альткоинам снова разрешены."
                                 )
                                 await bot.send_telegram_message(msg)
                                 logger.info(msg)
@@ -293,6 +300,21 @@ class Database:
                 message TEXT,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                 sent INTEGER DEFAULT 0
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ml_training_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                rsi REAL,
+                adx REAL,
+                ema200_dist_pct REAL,
+                order_book_imbalance REAL,
+                fear_greed_index INTEGER,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                result_pnl_pct REAL
             )
         ''')
 
@@ -522,6 +544,40 @@ class Database:
         conn.close()
         return dict(row) if row else {}
 
+    def save_ml_features(self, features: Dict) -> int:
+        """Save ML training features when a position is opened."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO ml_training_data
+                (symbol, side, rsi, adx, ema200_dist_pct,
+                 order_book_imbalance, fear_greed_index)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            features.get('symbol', ''),
+            features.get('side', ''),
+            features.get('rsi', 0.0),
+            features.get('adx', 0.0),
+            features.get('ema200_dist_pct', 0.0),
+            features.get('order_book_imbalance', 1.0),
+            features.get('fear_greed_index', 50),
+        ))
+        ml_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return ml_id
+
+    def update_ml_result(self, ml_id: int, result_pnl_pct: float):
+        """Update ML training row with final PnL after position is closed."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            'UPDATE ml_training_data SET result_pnl_pct = ? WHERE id = ?',
+            (result_pnl_pct, ml_id)
+        )
+        conn.commit()
+        conn.close()
+
 
 # ============================================================================
 # ИНДИКАТОРЫ И SMC АНАЛИЗ
@@ -532,6 +588,33 @@ class SMCAnalyzer:
 
     def __init__(self, exchange: ccxt.binanceusdm):
         self.exchange = exchange
+
+    async def analyze_order_book(self, symbol: str, limit: int = 20) -> float:
+        """Analyze L2 Order Book imbalance.
+        Returns imbalance_ratio = total_bid_volume / total_ask_volume.
+        >1 means buy pressure dominates, <1 means sell pressure dominates.
+        Returns 1.0 (neutral) on error.
+        """
+        try:
+            ob = await self.exchange.fetch_order_book(symbol, limit=limit)
+            bids = ob.get('bids', [])
+            asks = ob.get('asks', [])
+
+            if not bids or not asks:
+                return 1.0
+
+            total_bid_vol = sum(entry[1] for entry in bids)
+            total_ask_vol = sum(entry[1] for entry in asks)
+
+            if total_ask_vol <= 0:
+                return 2.0  # No asks = extreme buy pressure
+
+            imbalance_ratio = total_bid_vol / total_ask_vol
+            logger.debug(f"Order Book {symbol}: bid_vol={total_bid_vol:.2f} ask_vol={total_ask_vol:.2f} imbalance={imbalance_ratio:.3f}")
+            return imbalance_ratio
+        except Exception as e:
+            logger.warning(f"Ошибка анализа стакана {symbol}: {e}")
+            return 1.0
 
     def calculate_atr(self, highs: List[float], lows: List[float], closes: List[float], period: int = 14) -> float:
         if len(closes) < period + 1:
@@ -839,7 +922,9 @@ class SMCAnalyzer:
             'adx': 0,
             'macd': {},
             'ema200': 0,
-            'volume_ok': False
+            'volume_ok': False,
+            'order_book_imbalance': 1.0,
+            'features_dict': {}
         }
 
         try:
@@ -1057,6 +1142,38 @@ class SMCAnalyzer:
                 result['direction'] = 'LONG' if long_score >= short_score else 'SHORT'
                 result['indicators'] = long_ind if long_score >= short_score else short_ind
 
+            # === ФИЧА 1: ORDER BOOK IMBALANCE FILTER ===
+            if result['signal']:
+                imbalance = await self.analyze_order_book(symbol)
+                result['order_book_imbalance'] = imbalance
+
+                if result['direction'] == 'LONG' and imbalance < 0.8:
+                    logger.info(
+                        f"{symbol}: ЛОНГ отменён — давление продавцов в стакане "
+                        f"(imbalance={imbalance:.3f} < 0.8)"
+                    )
+                    result['signal'] = False
+                elif result['direction'] == 'SHORT' and imbalance > 1.2:
+                    logger.info(
+                        f"{symbol}: ШОРТ отменён — давление покупателей в стакане "
+                        f"(imbalance={imbalance:.3f} > 1.2)"
+                    )
+                    result['signal'] = False
+
+            # === ФИЧА 3: FEATURES DICT ДЛЯ ML ===
+            ema200_dist_pct = 0.0
+            if result.get('ema200') and result['ema200'] > 0:
+                ema200_dist_pct = ((current_price - result['ema200']) / result['ema200']) * 100.0
+
+            result['features_dict'] = {
+                'symbol': symbol,
+                'side': result['direction'],
+                'rsi': result.get('rsi', 0.0),
+                'adx': result.get('adx', 0.0),
+                'ema200_dist_pct': ema200_dist_pct,
+                'order_book_imbalance': result.get('order_book_imbalance', 1.0),
+                'fear_greed_index': FEAR_GREED_VALUE,
+            }
 
         except Exception as e:
             logger.error(f"Ошибка анализа {symbol}: {e}")
@@ -1094,6 +1211,9 @@ class Position:
     # ✅ ДОБАВЛЯЕМ ПЕРЕМЕННЫЕ ДЛЯ ХРАНЕНИЯ ЦЕН ЦЕЛЕЙ
     tp2_price: float = 0.0
     tp3_price: float = 0.0
+
+    # Фича 3: ID записи в ml_training_data для обновления PnL при закрытии
+    ml_data_id: int = 0
     
     # FIX #10: локальный лок для предотвращения двойного срабатывания TP
     _monitor_lock: Any = field(default=None, repr=False, compare=False)
@@ -1415,6 +1535,16 @@ class SmartMoneyBot:
             logger.info(f"Сигнал {symbol} — торговля приостановлена (Fear & Greed)")
             return None
 
+        # Фича 2: При Extreme Fear блокируем ЛОНГИ по альткоинам, ШОРТЫ разрешены
+        direction = smc_result.get('direction', 'LONG')
+        is_btc = symbol.upper().startswith('BTC')
+        if not ALLOW_LONG_ALTS and direction == 'LONG' and not is_btc:
+            logger.info(
+                f"Сигнал ЛОНГ {symbol} заблокирован — Extreme Fear "
+                f"(F&G={FEAR_GREED_VALUE}), только ШОРТЫ разрешены для альткоинов"
+            )
+            return None
+
         if self.is_session_loss_limit_reached():
             logger.warning(f"MAX_SESSION_LOSS достигнут — все сделки заблокированы")
             return None
@@ -1631,6 +1761,17 @@ class SmartMoneyBot:
 
             self.positions[position_id] = position
 
+            # Фича 3: Сохраняем ML features для будущего обучения нейросети
+            features_dict = smc_result.get('features_dict', {})
+            if features_dict:
+                features_dict['side'] = direction  # Обновляем направление на реальное
+                try:
+                    ml_id = self.db.save_ml_features(features_dict)
+                    position.ml_data_id = ml_id
+                    logger.info(f"ML features saved: id={ml_id} for {symbol} {direction}")
+                except Exception as ml_err:
+                    logger.warning(f"Не удалось сохранить ML features для {symbol}: {ml_err}")
+
             score = smc_result['score']
             quality = "★★★ СИЛЬНЫЙ" if score >= 6 else ("★★☆ ХОРОШИЙ" if score >= 5 else "★☆☆ СРЕДНИЙ")
             rr = config.TP3_PCT / config.STOP_LOSS_PCT if config.STOP_LOSS_PCT > 0 else 0
@@ -1739,6 +1880,9 @@ class SmartMoneyBot:
             count_as_trade=True,
             equity_reference=config.DEPOSIT
         )
+        # Фича 3: Обновляем ML запись итоговым PnL
+        if position.ml_data_id:
+            self.db.update_ml_result(position.ml_data_id, pnl_pct)
         self._balance_cache_time = 0
 
         # ФОРМАТИРОВАНИЕ ЕДИНОГО СООБЩЕНИЯ (без дублей)
@@ -1879,6 +2023,10 @@ class SmartMoneyBot:
                 count_as_trade=True,
                 equity_reference=config.DEPOSIT
             )
+
+            # Фича 3: Обновляем ML запись итоговым PnL
+            if position.ml_data_id:
+                self.db.update_ml_result(position.ml_data_id, pnl_pct)
 
             self._balance_cache_time = 0
 
