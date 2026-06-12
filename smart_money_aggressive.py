@@ -1588,15 +1588,17 @@ class SmartMoneyBot:
                     side_bin = 1 if direction == 'LONG' else 0
                     import pandas as pd
                     
-                    # Упаковываем данные в таблицу с правильными названиями колонок
+                    # Жестко задаем порядок и названия колонок, как требует XGBoost
+                    feature_columns = ['rsi', 'adx', 'ema200_dist_pct', 'order_book_imbalance', 'fear_greed_index', 'side_binary']
+                    
                     features_df = pd.DataFrame([{
-                        'rsi': f_dict.get('rsi', 0.0),
-                        'adx': f_dict.get('adx', 0.0),
-                        'ema200_dist_pct': f_dict.get('ema200_dist_pct', 0.0),
-                        'order_book_imbalance': f_dict.get('order_book_imbalance', 1.0),
-                        'fear_greed_index': f_dict.get('fear_greed_index', 50),
-                        'side_binary': side_bin
-                    }])
+                        'rsi': float(f_dict.get('rsi', 0.0)),
+                        'adx': float(f_dict.get('adx', 0.0)),
+                        'ema200_dist_pct': float(f_dict.get('ema200_dist_pct', 0.0)),
+                        'order_book_imbalance': float(f_dict.get('order_book_imbalance', 1.0)),
+                        'fear_greed_index': float(f_dict.get('fear_greed_index', 50.0)),
+                        'side_binary': int(side_bin)
+                    }], columns=feature_columns)
                     
                     # Передаем таблицу в модель
                     prob = self.ml_model.predict_proba(features_df)[0][1]
@@ -1613,6 +1615,7 @@ class SmartMoneyBot:
                 except Exception as e:
                     logger.warning(f"Ошибка предсказания ML модели: {e}")
             # ------------------------
+
 
             market_info = self.exchange.market(symbol)
             min_notional = float(market_info.get('limits', {}).get('cost', {}).get('min', 5))
