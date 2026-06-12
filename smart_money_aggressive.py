@@ -1259,13 +1259,18 @@ class SmartMoneyBot:
         try:
             import joblib
             import os
-            if os.path.exists('trade_model.pkl'):
-                self.ml_model = joblib.load('trade_model.pkl')
-                logger.info("🧠 ML Модель 'trade_model.pkl' успешно загружена!")
+            
+            # Получаем точный, железобетонный путь к папке самого скрипта
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            model_path = os.path.join(current_dir, 'trade_model.pkl')
+            
+            if os.path.exists(model_path):
+                self.ml_model = joblib.load(model_path)
+                logger.info(f"🧠 ML Модель успешно загружена из: {model_path}")
             else:
-                logger.warning("Файл 'trade_model.pkl' не найден, бот работает без ML-фильтра.")
-        except ImportError:
-            logger.warning("Библиотека joblib не установлена, бот работает без ML-фильтра.")
+                logger.warning(f"Файл модели не найден по пути: {model_path}")
+        except Exception as e:
+            logger.warning(f"Ошибка при загрузке ML-фильтра: {e}")
         except Exception as e:
             logger.warning(f"Ошибка загрузки ML модели: {e}")
 
