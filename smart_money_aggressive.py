@@ -86,10 +86,10 @@ class StrategyConfig:
     # Финансовые параметры
     DEPOSIT: float = 50.0
     ENTRY_AMOUNT: float = 50.0
-    LEVERAGE: int = 50
+    LEVERAGE: int = 25
 
     # Риск-менеджмент
-    STOP_LOSS_PCT: float = 0.75
+    STOP_LOSS_PCT: float = 1.5
     TAKE_PROFIT_PCT: float = 2.5
     TAKE_PROFIT: float = 4.0
     TP2_PCT: float = 4.0
@@ -994,7 +994,7 @@ class SMCAnalyzer:
                 result['ema50'] = ema50[-1]
                 ema_dist_pct = abs(current_price - ema50[-1]) / ema50[-1] * 100
 
-                if ema_dist_pct <= 0.8:
+                if ema_dist_pct <= 2.0:
                     is_near_ema = True
 
                 if current_price > ema50[-1] and is_near_ema:
@@ -1010,10 +1010,10 @@ class SMCAnalyzer:
             if rsi and len(rsi) >= 2:
                 result['rsi'] = rsi[-1]
                 # Ищем импульс в зоне тренда, а не во флэте
-                if 50 <= rsi[-1] <= 70 and rsi[-1] > rsi[-2]:
+                if 45 <= rsi[-1] <= 75 and rsi[-1] > rsi[-2]:
                     long_score += 1
                     long_ind['rsi_momentum'] = True
-                if 30 <= rsi[-1] <= 50 and rsi[-1] < rsi[-2]:
+                if 25 <= rsi[-1] <= 55 and rsi[-1] < rsi[-2]:
                     short_score += 1
                     short_ind['rsi_momentum'] = True
 
@@ -1022,10 +1022,9 @@ class SMCAnalyzer:
             adx = self.calculate_adx(highs_5m, lows_5m, closes_5m, 14)
             if adx:
                 result['adx'] = adx[-1]
-                if adx[-1] < 20:
-                    logger.info(f"Пропуск {symbol}: Глубокий флэт (ADX = {adx[-1]:.1f} < 20)")
-                    return result
-                elif adx[-1] >= 25:
+                # ADX < 15 = полный флэт, не даём балл но НЕ return
+                # ADX >= 20 = начало тренда, даём балл
+                if adx[-1] >= 20:
                     if ema50 and current_price > ema50[-1]:
                         long_score += 1
                         long_ind['adx'] = True
@@ -1049,7 +1048,7 @@ class SMCAnalyzer:
                 vol_ratio_last = volumes_5m[-1] / vol_sma[-1]
                 
                 # Вариант A: Сильный спайк на последней свече (> 2x среднего)
-                strong_spike = vol_ratio_last > 2.0
+                strong_spike = vol_ratio_last > 1.5
                 
                 # Вариант B: 2 из 3 свечей с объёмом > 1.3x среднего
                 above_avg_count = 0
@@ -1103,8 +1102,8 @@ class SMCAnalyzer:
             if long_score >= short_score and long_score >= config.MIN_INDICATORS_SCORE:
                 # Для ЛОНГА
                 has_smc = (
-                    long_ind.get('bos') and
-                    (long_ind.get('fvg') or long_ind.get('ob'))
+                    long_ind.get('bos') or
+                    long_ind.get('fvg') or long_ind.get('ob')
                 )
 
                 if not has_smc:
@@ -1122,8 +1121,8 @@ class SMCAnalyzer:
             elif short_score > long_score and short_score >= config.MIN_INDICATORS_SCORE:
                 # Для ШОРТА
                 has_smc = (
-                    short_ind.get('bos') and
-                    (short_ind.get('fvg') or short_ind.get('ob'))
+                    short_ind.get('bos') or
+                    short_ind.get('fvg') or short_ind.get('ob')
                 )
 
                 if not has_smc:
@@ -1497,13 +1496,11 @@ class SmartMoneyBot:
                 return 0, 0, 0
 
             # === ПРОЦЕНТ НА ПОЗИЦИЮ ===
-            amount_per_slot = virtual_free / remaining_slots
             weight = min(max(score, config.MIN_INDICATORS_SCORE) / 5.0, 1.5)
-            amount_usdt = amount_per_slot * weight * risk_multiplier
+            # Используем фиксированный ENTRY_AMOUNT для ощутимой прибыли, а не копеек
+            amount_usdt = config.ENTRY_AMOUNT * weight * risk_multiplier
 
-            # Ограничиваем максимальную сделку до 20% от виртуального депозита (а не 30%, чтобы было безопаснее)
-            max_single_position = virtual_equity * 0.20
-            amount_usdt = min(amount_usdt, virtual_free, max_single_position)
+            amount_usdt = min(amount_usdt, virtual_free)
 
             if amount_usdt < config.MIN_SLOT_USDT:
                 if virtual_free >= config.MIN_SLOT_USDT:
@@ -1729,21 +1726,15 @@ class SmartMoneyBot:
             # FIX #12: сбрасываем кэш баланса после открытия позиции
             self._balance_cache_time = 0
 
-            atr = smc_result.get('atr', 0)
-            max_safe_dist = actual_entry * 0.015
+            # Убираем кривой ATR и max_safe_dist. Считаем строго по конфигу.
+            # SL задан в % от движения цены:
+            sl_dist = actual_entry * (config.STOP_LOSS_PCT / 100)
 
-            if atr > 0:
-                sl_dist = atr * 2.5
-                if sl_dist > max_safe_dist:
-                    sl_dist = max_safe_dist
-                tp1_dist = sl_dist * 1.5
-                tp2_dist = sl_dist * 2.8  # Цель для TP2
-                tp3_dist = sl_dist * 4.0  # Цель для TP3
-            else:
-                sl_dist = actual_entry * (config.STOP_LOSS_PCT / 100)
-                tp1_dist = actual_entry * (config.TAKE_PROFIT_PCT / 100)
-                tp2_dist = actual_entry * (config.TP2_PCT / 100)
-                tp3_dist = actual_entry * (config.TP3_PCT / 100)
+            # Твои TP (TP1_PCT и т.д.) в конфиге заданы в ROE. 
+            # Чтобы перевести ROE в реальное движение цены, делим на плечо.
+            tp1_dist = actual_entry * (config.PARTIAL_TP1_PCT / actual_leverage / 100)
+            tp2_dist = actual_entry * (config.PARTIAL_TP2_PCT / actual_leverage / 100)
+            tp3_dist = actual_entry * (config.PARTIAL_TP3_PCT / actual_leverage / 100)
 
             if direction == 'SHORT':
                 actual_sl = float(self.exchange.price_to_precision(symbol, actual_entry + sl_dist))
@@ -1829,7 +1820,7 @@ class SmartMoneyBot:
 
             score = smc_result['score']
             quality = "★★★ СИЛЬНЫЙ" if score >= 6 else ("★★☆ ХОРОШИЙ" if score >= 5 else "★☆☆ СРЕДНИЙ")
-            rr = config.TP3_PCT / config.STOP_LOSS_PCT if config.STOP_LOSS_PCT > 0 else 0
+            rr = (tp3_dist / sl_dist) if sl_dist > 0 else 0
 
             message = (
                 f"✅ ПОЗИЦИЯ ОТКРЫТА\n"
@@ -2393,9 +2384,11 @@ class SmartMoneyBot:
                         position.partial_tp1_done = True
                         is_success = await self.close_partial_position(position, position.quantity * 0.40, current_price)
                         if is_success:
-                            new_sl = (position.entry_price * (1 - 0.003)
+                            # Перенос в +0.1% ROE для покрытия комиссии
+                            be_pct = 0.1 / position.leverage / 100 
+                            new_sl = (position.entry_price * (1 - be_pct)
                                       if position.side == 'SHORT'
-                                      else position.entry_price * (1 + 0.003))
+                                      else position.entry_price * (1 + be_pct))
                             await self._update_exchange_sl(position, new_sl)
                             await self._update_exchange_tp(position, position.tp2_price)
                             
@@ -2420,9 +2413,11 @@ class SmartMoneyBot:
                         position.partial_tp2_done = True
                         is_success = await self.close_partial_position(position, position.remaining_quantity * 0.50, current_price)
                         if is_success:
-                            new_sl = (position.entry_price * (1 - 0.009)
+                            # Перенос стопа в +10% ROE
+                            sl_pct_tp2 = 10.0 / position.leverage / 100
+                            new_sl = (position.entry_price * (1 - sl_pct_tp2)
                                       if position.side == 'SHORT'
-                                      else position.entry_price * (1 + 0.009))
+                                      else position.entry_price * (1 + sl_pct_tp2))
                             await self._update_exchange_sl(position, new_sl)
                             await self._update_exchange_tp(position, position.tp3_price)
                             
@@ -2453,9 +2448,11 @@ class SmartMoneyBot:
                         if close_qty > 0:
                             is_success = await self.close_partial_position(position, close_qty, current_price)
                             if is_success:
-                                new_sl = (position.entry_price * (1 - 0.018)
+                                # Перенос стопа в +30% ROE (защита раннера)
+                                sl_pct_tp3 = 30.0 / position.leverage / 100
+                                new_sl = (position.entry_price * (1 - sl_pct_tp3)
                                           if position.side == 'SHORT'
-                                          else position.entry_price * (1 + 0.018))
+                                          else position.entry_price * (1 + sl_pct_tp3))
                                 await self._update_exchange_sl(position, new_sl)
                                 await self._update_exchange_tp(position, position.tp3_price)
                                 
@@ -2574,7 +2571,7 @@ class SmartMoneyBot:
         while self.is_running:
             try:
                 await self.scan_market()
-                await asyncio.sleep(60)
+                await asyncio.sleep(30)
             except Exception as e:
                 logger.error(f"Ошибка в цикле сканирования: {e}")
                 await asyncio.sleep(30)
