@@ -1584,37 +1584,63 @@ class SmartMoneyBot:
             risk_mult = 1.0
             if self.ml_model is not None:
                 try:
+                    import pandas as pd
+                    import numpy as np
+                    
                     f_dict = smc_result.get('features_dict', {})
                     side_bin = 1 if direction == 'LONG' else 0
-                    import pandas as pd
                     
-                    # Жестко задаем порядок и названия колонок, как требует XGBoost
-                    feature_columns = ['rsi', 'adx', 'ema200_dist_pct', 'order_book_imbalance', 'fear_greed_index', 'side_binary']
-                    
-                    features_df = pd.DataFrame([{
+                    # 1. Базовые значения
+                    raw_data = {
                         'rsi': float(f_dict.get('rsi', 0.0)),
                         'adx': float(f_dict.get('adx', 0.0)),
                         'ema200_dist_pct': float(f_dict.get('ema200_dist_pct', 0.0)),
                         'order_book_imbalance': float(f_dict.get('order_book_imbalance', 1.0)),
                         'fear_greed_index': float(f_dict.get('fear_greed_index', 50.0)),
-                        'side_binary': int(side_bin)
-                    }], columns=feature_columns)
+                        'side_binary': int(side_bin),
+                        'side': int(side_bin)  # Запасной ключ
+                    }
                     
-                    # Передаем таблицу в модель
-                    prob = self.ml_model.predict_proba(features_df)[0][1]
+                    ordered_vals = [
+                        raw_data['rsi'], raw_data['adx'], raw_data['ema200_dist_pct'],
+                        raw_data['order_book_imbalance'], raw_data['fear_greed_index'], raw_data['side_binary']
+                    ]
                     
+                    # 2. Спрашиваем у модели, какие именно колонки она ждет
+                    expected_cols = None
+                    if hasattr(self.ml_model, 'feature_names_in_') and getattr(self.ml_model, 'feature_names_in_', None) is not None:
+                        expected_cols = list(self.ml_model.feature_names_in_)
+                    elif hasattr(self.ml_model, 'get_booster') and getattr(self.ml_model.get_booster(), 'feature_names', None) is not None:
+                        expected_cols = self.ml_model.get_booster().feature_names
+                        
+                    # 3. Подстраиваемся под капризы ИИ
+                    if expected_cols is not None:
+                        if len(expected_cols) > 0 and expected_cols[0] == 'f0':
+                            # Если ИИ ждет безымянные технические колонки [f0, f1...]
+                            features_df = pd.DataFrame([ordered_vals], columns=expected_cols)
+                        else:
+                            # Если ИИ ждет конкретные текстовые названия
+                            row = [raw_data.get(c, 0.0) for c in expected_cols]
+                            features_df = pd.DataFrame([row], columns=expected_cols)
+                        prob = self.ml_model.predict_proba(features_df.values)[0][1]
+                    else:
+                        # Запасной вариант (голый массив) на случай другой библиотеки
+                        prob = self.ml_model.predict_proba(np.array([ordered_vals]))[0][1]
+                    
+                    # 4. Принимаем решение
                     if prob < 0.50:
-                        logger.info(f"Сигнал {symbol} отменен ИИ: вероятность успеха {prob*100:.1f}% < 50%")
+                        logger.info(f"Сигнал {symbol} отменен ИИ: вероятность {prob*100:.1f}% < 50%")
                         return None
                     
                     ai_prob_str = f"🧠 AI Уверенность: {prob*100:.1f}%\n"
                     
                     if prob >= 0.80:
-                        logger.info(f"{symbol}: Высокая уверенность ИИ ({prob*100:.1f}%) -> Применяем risk_multiplier x1.5")
+                        logger.info(f"{symbol}: ИИ уверен ({prob*100:.1f}%) -> повышаем риск x1.5")
                         risk_mult = 1.5
                 except Exception as e:
-                    logger.warning(f"Ошибка предсказания ML модели: {e}")
+                    logger.warning(f"Ошибка предсказания ML: {e}")
             # ------------------------
+
 
 
             market_info = self.exchange.market(symbol)
