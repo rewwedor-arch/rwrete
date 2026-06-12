@@ -1586,15 +1586,20 @@ class SmartMoneyBot:
                 try:
                     f_dict = smc_result.get('features_dict', {})
                     side_bin = 1 if direction == 'LONG' else 0
-                    features = [
-                        f_dict.get('rsi', 0.0),
-                        f_dict.get('adx', 0.0),
-                        f_dict.get('ema200_dist_pct', 0.0),
-                        f_dict.get('order_book_imbalance', 1.0),
-                        f_dict.get('fear_greed_index', 50),
-                        side_bin
-                    ]
-                    prob = self.ml_model.predict_proba([features])[0][1]
+                    import pandas as pd
+                    
+                    # Упаковываем данные в таблицу с правильными названиями колонок
+                    features_df = pd.DataFrame([{
+                        'rsi': f_dict.get('rsi', 0.0),
+                        'adx': f_dict.get('adx', 0.0),
+                        'ema200_dist_pct': f_dict.get('ema200_dist_pct', 0.0),
+                        'order_book_imbalance': f_dict.get('order_book_imbalance', 1.0),
+                        'fear_greed_index': f_dict.get('fear_greed_index', 50),
+                        'side_binary': side_bin
+                    }])
+                    
+                    # Передаем таблицу в модель
+                    prob = self.ml_model.predict_proba(features_df)[0][1]
                     
                     if prob < 0.50:
                         logger.info(f"Сигнал {symbol} отменен ИИ: вероятность успеха {prob*100:.1f}% < 50%")
