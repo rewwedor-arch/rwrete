@@ -86,7 +86,7 @@ class StrategyConfig:
     # Финансовые параметры
     DEPOSIT: float = 50.0
     ENTRY_AMOUNT: float = 50.0
-    LEVERAGE: int = 25
+    LEVERAGE: int = 50
 
     # Риск-менеджмент
     STOP_LOSS_PCT: float = 1.5
@@ -130,8 +130,8 @@ class StrategyConfig:
     DRAWDOWN_ALERT: float = 12.0
 
     # Momentum exit
-    MOMENTUM_EXIT_MINUTES: int = 120
-    MOMENTUM_MIN_PROFIT: float = 0.3
+    MOMENTUM_EXIT_MINUTES: int = 45
+    MOMENTUM_MIN_PROFIT: float = 1.0
     MOMENTUM_MIN_ADX: float = 23.0
 
     # Портфельная стратегия
@@ -313,6 +313,14 @@ class Database:
                 ema200_dist_pct REAL,
                 order_book_imbalance REAL,
                 fear_greed_index INTEGER,
+                rsi_slope REAL DEFAULT 0,
+                adx_slope REAL DEFAULT 0,
+                atr_pct REAL DEFAULT 0,
+                volume_ratio REAL DEFAULT 0,
+                ema50_dist_pct REAL DEFAULT 0,
+                bullish_candles_ratio REAL DEFAULT 0,
+                price_vs_equilibrium REAL DEFAULT 0,
+                macd_histogram REAL DEFAULT 0,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                 result_pnl_pct REAL
             )
@@ -548,11 +556,26 @@ class Database:
         """Save ML training features when a position is opened."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
+        
+        # Ensure new columns exist (migration for old DBs)
+        for col, col_type in [
+            ('rsi_slope', 'REAL DEFAULT 0'), ('adx_slope', 'REAL DEFAULT 0'),
+            ('atr_pct', 'REAL DEFAULT 0'), ('volume_ratio', 'REAL DEFAULT 0'),
+            ('ema50_dist_pct', 'REAL DEFAULT 0'), ('bullish_candles_ratio', 'REAL DEFAULT 0'),
+            ('price_vs_equilibrium', 'REAL DEFAULT 0'), ('macd_histogram', 'REAL DEFAULT 0'),
+        ]:
+            try:
+                cursor.execute(f'ALTER TABLE ml_training_data ADD COLUMN {col} {col_type}')
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+        
         cursor.execute('''
             INSERT INTO ml_training_data
                 (symbol, side, rsi, adx, ema200_dist_pct,
-                 order_book_imbalance, fear_greed_index)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                 order_book_imbalance, fear_greed_index,
+                 rsi_slope, adx_slope, atr_pct, volume_ratio,
+                 ema50_dist_pct, bullish_candles_ratio, price_vs_equilibrium, macd_histogram)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             features.get('symbol', ''),
             features.get('side', ''),
@@ -561,6 +584,14 @@ class Database:
             features.get('ema200_dist_pct', 0.0),
             features.get('order_book_imbalance', 1.0),
             features.get('fear_greed_index', 50),
+            features.get('rsi_slope', 0.0),
+            features.get('adx_slope', 0.0),
+            features.get('atr_pct', 0.0),
+            features.get('volume_ratio', 0.0),
+            features.get('ema50_dist_pct', 0.0),
+            features.get('bullish_candles_ratio', 0.0),
+            features.get('price_vs_equilibrium', 0.0),
+            features.get('macd_histogram', 0.0),
         ))
         ml_id = cursor.lastrowid
         conn.commit()
@@ -1022,9 +1053,12 @@ class SMCAnalyzer:
             adx = self.calculate_adx(highs_5m, lows_5m, closes_5m, 14)
             if adx:
                 result['adx'] = adx[-1]
-                # ADX < 15 = полный флэт, не даём балл но НЕ return
-                # ADX >= 20 = начало тренда, даём балл
-                if adx[-1] >= 20:
+                if adx[-1] < 18:
+                    logger.info(f"Пропуск {symbol}: Глубокий флэт (ADX = {adx[-1]:.1f} < 18)")
+                    return result
+
+                # ADX >= 22 = начало тренда, даём балл
+                if adx[-1] >= 22:
                     if ema50 and current_price > ema50[-1]:
                         long_score += 1
                         long_ind['adx'] = True
@@ -1047,8 +1081,8 @@ class SMCAnalyzer:
             if vol_sma and vol_sma[-1] > 0 and len(volumes_5m) >= 3 and len(closes_5m) >= 3:
                 vol_ratio_last = volumes_5m[-1] / vol_sma[-1]
                 
-                # Вариант A: Сильный спайк на последней свече (> 2x среднего)
-                strong_spike = vol_ratio_last > 1.5
+                # Вариант A: Сильный спайк на последней свече (> 1.8x среднего)
+                strong_spike = vol_ratio_last > 1.8
                 
                 # Вариант B: 2 из 3 свечей с объёмом > 1.3x среднего
                 above_avg_count = 0
@@ -1149,10 +1183,45 @@ class SMCAnalyzer:
                 # Раньше тут стоял ручной фильтр по стакану. 
                 # Теперь мы передаем эти данные в ML-модель, и она сама решает,
                 # блокировать сделку или нет, учитывая все остальные факторы!
-            # === ФИЧА 3: FEATURES DICT ДЛЯ ML ===
+            # === ФИЧА 3: FEATURES DICT ДЛЯ ML (РАСШИРЕННЫЙ) ===
             ema200_dist_pct = 0.0
             if result.get('ema200') and result['ema200'] > 0:
                 ema200_dist_pct = ((current_price - result['ema200']) / result['ema200']) * 100.0
+
+            # Скорость изменения RSI (моментум: растёт/падает)
+            rsi_slope = 0.0
+            rsi_vals = self.calculate_rsi(closes_5m, 14)
+            if rsi_vals and len(rsi_vals) >= 5:
+                rsi_slope = rsi_vals[-1] - rsi_vals[-5]  # разница RSI за 5 свечей
+
+            # Скорость изменения ADX
+            adx_slope = 0.0
+            adx_vals = self.calculate_adx(highs_5m, lows_5m, closes_5m, 14)
+            if adx_vals and len(adx_vals) >= 5:
+                adx_slope = adx_vals[-1] - adx_vals[-5]
+
+            # Волатильность (ATR в % от цены)
+            atr_pct = (atr_val / current_price * 100) if atr_val and current_price > 0 else 0.0
+
+            # Объёмный профиль (текущий объём vs средний)
+            vol_sma_vals = self.calculate_sma(volumes_5m, 20)
+            volume_ratio = (volumes_5m[-1] / vol_sma_vals[-1]) if vol_sma_vals and vol_sma_vals[-1] > 0 else 1.0
+
+            # Расстояние до EMA50
+            ema50_dist_pct = 0.0
+            if result.get('ema50') and result['ema50'] > 0:
+                ema50_dist_pct = ((current_price - result['ema50']) / result['ema50']) * 100.0
+
+            # Паттерн последних свечей (какой % из последних 10 свечей зелёные)
+            recent = closes_5m[-10:] if len(closes_5m) >= 10 else closes_5m
+            bullish_count = sum(1 for i in range(1, len(recent)) if recent[i] > recent[i-1])
+            bullish_candles_ratio = bullish_count / max(len(recent) - 1, 1)
+
+            # Позиция цены относительно равновесия (equilibrium): >0 = premium, <0 = discount
+            price_vs_eq = ((current_price - equilibrium) / equilibrium * 100) if equilibrium > 0 else 0.0
+
+            # MACD histogram
+            macd_hist = result.get('macd', {}).get('histogram', 0.0)
 
             result['features_dict'] = {
                 'symbol': symbol,
@@ -1162,6 +1231,15 @@ class SMCAnalyzer:
                 'ema200_dist_pct': ema200_dist_pct,
                 'order_book_imbalance': result.get('order_book_imbalance', 1.0),
                 'fear_greed_index': FEAR_GREED_VALUE,
+                # Новые фичи для предсказания импульса:
+                'rsi_slope': rsi_slope,
+                'adx_slope': adx_slope,
+                'atr_pct': atr_pct,
+                'volume_ratio': volume_ratio,
+                'ema50_dist_pct': ema50_dist_pct,
+                'bullish_candles_ratio': bullish_candles_ratio,
+                'price_vs_equilibrium': price_vs_eq,
+                'macd_histogram': macd_hist,
             }
 
         except Exception as e:
@@ -1498,9 +1576,9 @@ class SmartMoneyBot:
             # === ПРОЦЕНТ НА ПОЗИЦИЮ ===
             weight = min(max(score, config.MIN_INDICATORS_SCORE) / 5.0, 1.5)
             
-            # Пользователь просил брать определенный процент (25%), чтобы не кидать все $50 в одну сделку
-            # Если виртуальный капитал $50, 25% = $12.5 на сделку. 
-            base_amount = virtual_equity * 0.25 
+            # 40% от капитала на сделку — не кидаем всё, но достаточно для ощутимой прибыли
+            # При $50 капитале: 40% = $20 маржа → хороший баланс между риском и прибылью
+            base_amount = virtual_equity * 0.40 
             
             amount_usdt = base_amount * weight * risk_multiplier
             amount_usdt = min(amount_usdt, virtual_free)
@@ -1595,7 +1673,15 @@ class SmartMoneyBot:
                         float(f_dict.get('ema200_dist_pct', 0.0)),
                         float(f_dict.get('order_book_imbalance', 1.0)),
                         float(f_dict.get('fear_greed_index', 50.0)),
-                        int(side_bin)
+                        int(side_bin),
+                        float(f_dict.get('rsi_slope', 0.0)),
+                        float(f_dict.get('adx_slope', 0.0)),
+                        float(f_dict.get('atr_pct', 0.0)),
+                        float(f_dict.get('volume_ratio', 1.0)),
+                        float(f_dict.get('ema50_dist_pct', 0.0)),
+                        float(f_dict.get('bullish_candles_ratio', 0.5)),
+                        float(f_dict.get('price_vs_equilibrium', 0.0)),
+                        float(f_dict.get('macd_histogram', 0.0)),
                     ]
                     
                     # Скармливаем ИИ голый двумерный массив

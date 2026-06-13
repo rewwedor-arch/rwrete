@@ -254,11 +254,27 @@ async def main():
                 # Insert into DB
                 conn = sqlite3.connect('smart_money.db')
                 cursor = conn.cursor()
+                
+                # Check columns migration
+                for col, col_type in [
+                    ('rsi_slope', 'REAL DEFAULT 0'), ('adx_slope', 'REAL DEFAULT 0'),
+                    ('atr_pct', 'REAL DEFAULT 0'), ('volume_ratio', 'REAL DEFAULT 0'),
+                    ('ema50_dist_pct', 'REAL DEFAULT 0'), ('bullish_candles_ratio', 'REAL DEFAULT 0'),
+                    ('price_vs_equilibrium', 'REAL DEFAULT 0'), ('macd_histogram', 'REAL DEFAULT 0'),
+                ]:
+                    try:
+                        cursor.execute(f'ALTER TABLE ml_training_data ADD COLUMN {col} {col_type}')
+                    except sqlite3.OperationalError:
+                        pass
+                
                 cursor.execute('''
                     INSERT INTO ml_training_data
                         (symbol, side, rsi, adx, ema200_dist_pct,
-                         order_book_imbalance, fear_greed_index, result_pnl_pct)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                         order_book_imbalance, fear_greed_index,
+                         rsi_slope, adx_slope, atr_pct, volume_ratio,
+                         ema50_dist_pct, bullish_candles_ratio, price_vs_equilibrium, macd_histogram,
+                         result_pnl_pct)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     features['symbol'],
                     features['side'],
@@ -267,6 +283,14 @@ async def main():
                     features.get('ema200_dist_pct', 0.0),
                     features['order_book_imbalance'],
                     features['fear_greed_index'],
+                    features.get('rsi_slope', 0.0),
+                    features.get('adx_slope', 0.0),
+                    features.get('atr_pct', 0.0),
+                    features.get('volume_ratio', 0.0),
+                    features.get('ema50_dist_pct', 0.0),
+                    features.get('bullish_candles_ratio', 0.0),
+                    features.get('price_vs_equilibrium', 0.0),
+                    features.get('macd_histogram', 0.0),
                     pnl_pct
                 ))
                 conn.commit()

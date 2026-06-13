@@ -36,37 +36,66 @@ def main():
     # Преобразуем направление в число: LONG = 1, SHORT = 0
     df['side_binary'] = df['side'].apply(lambda x: 1 if x.upper() == 'LONG' else 0)
 
-    # Определяем признаки (Features)
-    feature_columns = ['rsi', 'adx', 'ema200_dist_pct', 'order_book_imbalance', 'fear_greed_index', 'side_binary']
+    # Определяем признаки (Features) — расширенный набор из 14 фич
+    feature_columns = [
+        'rsi', 'adx', 'ema200_dist_pct', 'order_book_imbalance', 'fear_greed_index', 'side_binary',
+        'rsi_slope', 'adx_slope', 'atr_pct', 'volume_ratio',
+        'ema50_dist_pct', 'bullish_candles_ratio', 'price_vs_equilibrium', 'macd_histogram'
+    ]
+    # Для старых БД без новых колонок — добавляем их с нулями
+    for col in feature_columns:
+        if col not in df.columns:
+            df[col] = 0.0
     X = df[feature_columns].fillna(0) # На всякий случай заполняем NaN нулями
 
     # Формируем целевую переменную (Target)
-    # 1 - успешная сделка (профит > 0), 0 - убыточная
-    y = (df['result_pnl_pct'] > 0).astype(int)
+    # 1 - хорошая сделка (чистый профит > 1.0% с учетом комиссий), 0 - убыточная или "копейки"
+    y = (df['result_pnl_pct'] > 1.0).astype(int)
 
     logger.info("3. Разделение на обучающую и тестовую выборки (80/20)...")
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
     logger.info("4. Обучение градиентного бустинга (XGBoost)...")
+    
+    # Считаем баланс классов (обычно убыточных больше, чем прибыльных)
+    pos_count = sum(y_train)
+    neg_count = len(y_train) - pos_count
+    scale_weight = neg_count / max(pos_count, 1)
+
     model = XGBClassifier(
-        n_estimators=200, 
-        max_depth=5, 
-        learning_rate=0.05, 
+        n_estimators=300, 
+        max_depth=6, 
+        learning_rate=0.03, 
+        subsample=0.8,
+        colsample_bytree=0.8,
+        scale_pos_weight=scale_weight,
         eval_metric='logloss',
         random_state=42
     )
     model.fit(X_train, y_train)
 
     logger.info("5. Оценка качества модели на тестовой выборке:")
-    y_pred = model.predict(X_test)
+    y_prob = model.predict_proba(X_test)[:, 1]
     
-    acc = accuracy_score(y_test, y_pred)
-    prec = precision_score(y_test, y_pred, zero_division=0)
-    rec = recall_score(y_test, y_pred, zero_division=0)
+    # Оценка для стандартного порога (Уверенность > 50%)
+    y_pred_50 = (y_prob > 0.50).astype(int)
+    acc_50 = accuracy_score(y_test, y_pred_50)
+    prec_50 = precision_score(y_test, y_pred_50, zero_division=0)
+    rec_50 = recall_score(y_test, y_pred_50, zero_division=0)
+    
+    # Оценка для высокого порога (Уверенность > 75%)
+    y_pred_75 = (y_prob > 0.75).astype(int)
+    prec_75 = precision_score(y_test, y_pred_75, zero_division=0)
+    rec_75 = recall_score(y_test, y_pred_75, zero_division=0)
 
-    logger.info(f"   ► Accuracy (Точность):  {acc*100:.2f}%")
-    logger.info(f"   ► Precision (Доля верных успешных сигналов): {prec*100:.2f}%")
-    logger.info(f"   ► Recall (Полнота успешных сигналов): {rec*100:.2f}%")
+    logger.info(f"   [Порог входа > 50%]")
+    logger.info(f"   ► Accuracy (Точность):  {acc_50*100:.2f}%")
+    logger.info(f"   ► Precision (Доля верных сигналов): {prec_50*100:.2f}%")
+    logger.info(f"   ► Recall (Полнота успешных сигналов): {rec_50*100:.2f}%\n")
+    
+    logger.info(f"   [Порог входа > 75% (Снайпер)]")
+    logger.info(f"   ► Precision (Доля верных сигналов): {prec_75*100:.2f}%")
+    logger.info(f"   ► Recall (Полнота успешных сигналов): {rec_75*100:.2f}%")
 
     logger.info("\nВажность признаков (Feature Importance):")
     importances = model.feature_importances_
