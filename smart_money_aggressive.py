@@ -107,9 +107,14 @@ class StrategyConfig:
     TAKER_FEE: float = 0.0004  # 0.04%
 
     # Режим работы
-    WORK_HOURS: str = "24/7"
     DIRECTION: str = "BOTH"
     MIN_VOLUME_USDT: float = 15000000.0  # Минимальный суточный объем (15 млн $)
+    
+    # Фильтр по времени (защита от ночного флэта и ложных пробоев)
+    RESTRICT_HOURS: bool = True
+    # Время по Гринвичу (UTC). 5:00 UTC = 8:00 МСК, 18:00 UTC = 21:00 МСК
+    TRADE_START_HOUR_UTC: int = 5
+    TRADE_END_HOUR_UTC: int = 18
 
 
     # Параметры сигналов
@@ -2607,6 +2612,22 @@ class SmartMoneyBot:
             if self.signals_today >= self.max_signals_per_day:
                 logger.info(f"Лимит сигналов исчерпан: {self.signals_today}")
                 return
+                
+            # --- ФИЛЬТР ПО ВРЕМЕНИ (ЗАЩИТА ОТ НОЧНОГО РЫНКА) ---
+            if config.RESTRICT_HOURS:
+                now_utc = datetime.now(timezone.utc)
+                current_hour = now_utc.hour
+                # Проверяем, находится ли текущий час внутри разрешенного диапазона
+                if config.TRADE_START_HOUR_UTC <= config.TRADE_END_HOUR_UTC:
+                    is_allowed = config.TRADE_START_HOUR_UTC <= current_hour < config.TRADE_END_HOUR_UTC
+                else: # Переход через полночь
+                    is_allowed = current_hour >= config.TRADE_START_HOUR_UTC or current_hour < config.TRADE_END_HOUR_UTC
+                    
+                if not is_allowed:
+                    # Раз в час или при старте пишем, что мы спим
+                    if now_utc.minute == 0 and now_utc.second < 30:
+                        logger.info(f"💤 Ночной режим. Торги приостановлены до {config.TRADE_START_HOUR_UTC}:00 UTC (Текущий час: {current_hour}:00 UTC)")
+                    return
 
             if self.is_session_loss_limit_reached():
                 logger.warning(
