@@ -1497,9 +1497,12 @@ class SmartMoneyBot:
 
             # === ПРОЦЕНТ НА ПОЗИЦИЮ ===
             weight = min(max(score, config.MIN_INDICATORS_SCORE) / 5.0, 1.5)
-            # Используем фиксированный ENTRY_AMOUNT для ощутимой прибыли, а не копеек
-            amount_usdt = config.ENTRY_AMOUNT * weight * risk_multiplier
-
+            
+            # Пользователь просил брать определенный процент (25%), чтобы не кидать все $50 в одну сделку
+            # Если виртуальный капитал $50, 25% = $12.5 на сделку. 
+            base_amount = virtual_equity * 0.25 
+            
+            amount_usdt = base_amount * weight * risk_multiplier
             amount_usdt = min(amount_usdt, virtual_free)
 
             if amount_usdt < config.MIN_SLOT_USDT:
@@ -2458,13 +2461,13 @@ class SmartMoneyBot:
                                 
                                 await self.send_telegram_message(
                                     f"💎 TP3 +{config.PARTIAL_TP3_PCT:.0f}% ROE | {pair}\n"
-                                    f"Закрыто 90% позиции!\n"
                                     f"🎯 Оставлен раннер 10% с трейлинг-стопом"
                                 )
                                 position.trailing_active = True
                                 position.trailing_peak = pnl_pct
 
-
+                    # === ТАЙМАУТ И МЕДЛЕННЫЙ МИНУС ===
+                    await self.check_position_timeout(position)
 
                 except Exception as e:
                     logger.error(f"Ошибка мониторинга {position_id}: {e}")
@@ -2474,25 +2477,33 @@ class SmartMoneyBot:
             now = datetime.now(timezone.utc)
             duration_minutes = (now - position.timestamp).total_seconds() / 60
 
-            if duration_minutes < config.MOMENTUM_EXIT_MINUTES:
-                return
-
+            # Получаем PnL один раз
             ticker = await self.exchange.fetch_ticker(position.symbol)
             current_price = ticker['last']
             pnl_pct = self.calculate_position_roe(position, current_price)
 
-            if pnl_pct >= config.MOMENTUM_MIN_PROFIT:
-                return
+            # 1. Если сделка висит слишком долго (всю ночь) и не в огромном плюсе — рубим
+            if duration_minutes > config.POSITION_TIMEOUT_HOURS * 60:
+                if pnl_pct < 10.0:  # Не закрываем, только если мы в хорошем профите
+                    reason = (
+                        f"⏳ ТАЙМАУТ ПОЗИЦИИ\n"
+                        f"Висит больше {config.POSITION_TIMEOUT_HOURS} часов\nPNL: {pnl_pct:.2f}%"
+                    )
+                    await self.close_position(position.id, reason=reason)
+                    return
 
-            logger.info(
-                f"MOMENTUM EXIT: {position.symbol} | "
-                f"{duration_minutes:.1f}m | PNL={pnl_pct:.2f}%"
-            )
-            momentum_reason = (
-                f"⚠️ MOMENTUM EXIT\n"
-                f"Возраст: {duration_minutes:.0f} мин\nPNL: {pnl_pct:.2f}%"
-            )
-            await self.close_position(position.id, reason=momentum_reason)
+            # 2. Momentum exit (раннее закрытие медленных сделок, если они не дали прибыль)
+            if duration_minutes >= config.MOMENTUM_EXIT_MINUTES:
+                if pnl_pct < config.MOMENTUM_MIN_PROFIT:
+                    logger.info(
+                        f"MOMENTUM EXIT: {position.symbol} | "
+                        f"{duration_minutes:.1f}m | PNL={pnl_pct:.2f}%"
+                    )
+                    momentum_reason = (
+                        f"⚠️ MOMENTUM EXIT (Нет импульса)\n"
+                        f"Возраст: {duration_minutes:.0f} мин\nPNL: {pnl_pct:.2f}%"
+                    )
+                    await self.close_position(position.id, reason=momentum_reason)
 
         except Exception as e:
             logger.error(f"Ошибка timeout-проверки: {e}")
