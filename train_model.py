@@ -53,7 +53,6 @@ def main():
         max_depth=5, 
         learning_rate=0.05, 
         eval_metric='logloss',
-        use_label_encoder=False,
         random_state=42
     )
     model.fit(X_train, y_train)
