@@ -108,7 +108,9 @@ class StrategyConfig:
 
     # Режим работы
     DIRECTION: str = "BOTH"
-    MIN_VOLUME_USDT: float = 15000000.0  # Минимальный суточный объем (15 млн $)
+    MIN_VOLUME_USDT: float = 5000000.0   # Снижаем до 5 млн, чтобы бот видел волатильные альткоины
+
+ # Минимальный суточный объем (15 млн $)
     
     # Фильтр по времени (защита от ночного флэта и ложных пробоев)
     RESTRICT_HOURS: bool = True
@@ -118,7 +120,7 @@ class StrategyConfig:
 
 
     # Параметры сигналов
-    MIN_INDICATORS_SCORE: int = 4
+    MIN_INDICATORS_SCORE: int = 5  # Ужесточаем вход, так как R/R падает из-за частичных закрытий
     TOTAL_INDICATORS: int = 8
 
     # Таймфреймы
@@ -156,9 +158,9 @@ class StrategyConfig:
 
     # Частичные TP (в % ROE)
     PARTIAL_TP_ENABLED: bool = True
-    PARTIAL_TP1_PCT: float = 30.0
-    PARTIAL_TP2_PCT: float = 65.0
-    PARTIAL_TP3_PCT: float = 120.0
+    PARTIAL_TP1_PCT: float = 40.0  # Чуть дальше (4% цены при 10х), чтобы комиссия не съела профит
+    PARTIAL_TP2_PCT: float = 80.0
+    PARTIAL_TP3_PCT: float = 150.0 # Оставляем жирный хвост на случай пампа мемкоина
 
     # Время позиции
     POSITION_TIMEOUT_HOURS: float = 8.0
@@ -1818,11 +1820,27 @@ class SmartMoneyBot:
             )
 
             # FIX #12: сбрасываем кэш баланса после открытия позиции
-            self._balance_cache_time = 0
+        # FIX #12: сбрасываем кэш баланса после открытия позиции
+        self._balance_cache_time = 0
 
-            # Убираем кривой ATR и max_safe_dist. Считаем строго по конфигу.
-            # SL задан в % от движения цены:
+        # 🧠 ДИНАМИЧЕСКИЙ СТОП НА ОСНОВЕ ATR (защита от сквизов мемкоинов)
+        atr_val = smc_result.get('atr', 0)
+        if atr_val > 0 and actual_entry > 0:
+            # Базовый стоп = 1.5 ATR (золотой стандарт для импульсных альтов)
+            sl_dist_atr = atr_val * 1.5
+            sl_dist_pct = (sl_dist_atr / actual_entry) * 100
+            
+            # 🛡 Жёсткие границы (Floor & Ceiling):
+            # Минимум 1.5% (чтобы на BTC/ETH не ставить стоп 0.1%)
+            # Максимум 4.5% (чтобы на шиткоинах стоп не улетал на 15% и не ждал ликвидации)
+            sl_dist_pct = max(1.5, min(sl_dist_pct, 4.5))
+            
+            sl_dist = actual_entry * (sl_dist_pct / 100)
+            logger.info(f"{symbol}: 🧠 Dynamic SL = {sl_dist_pct:.2f}% (ATR={atr_val:.6f})")
+        else:
+            # Фоллбек: если ATR не рассчитался, используем конфиг
             sl_dist = actual_entry * (config.STOP_LOSS_PCT / 100)
+            logger.warning(f"{symbol}: ATR недоступен, используем фиксированный SL {config.STOP_LOSS_PCT}%")
 
             # Твои TP (TP1_PCT и т.д.) в конфиге заданы в ROE. 
             # Чтобы перевести ROE в реальное движение цены, делим на плечо.
@@ -3532,17 +3550,18 @@ async def main():
     USER_CHAT_ID = os.getenv('USER_CHAT_ID')
 
 
-    config.DEPOSIT = 50.0
-    config.ENTRY_AMOUNT = 50.0
-    config.LEVERAGE = 50
-    config.STOP_LOSS_PCT = 2.0
-    config.REINVEST_PROFITS = True
-    config.DRAWDOWN_ALERT = 12.0
-    config.MAX_CONCURRENT_POSITIONS = 20
-    config.MAX_SESSION_LOSS_PCT = 30.0
-    config.FILL_THRESHOLD = 0.90
+config.DEPOSIT = 100.0                 # Твой реальный депозит
+config.ENTRY_AMOUNT = 100.0
+config.LEVERAGE = 10                   # ⚠️ КРИТИЧНО: 10x! 50x тебя ликвидирует за минуту.
+config.STOP_LOSS_PCT = 2.5             # Фоллбек, если ATR не сработает
+config.REINVEST_PROFITS = True         # Включаем сложный процент (компаундинг)
+config.DRAWDOWN_ALERT = 12.0
+config.MAX_CONCURRENT_POSITIONS = 4    # ⚠️ Максимум 4 сделки. На $100 больше нельзя.
+config.MAX_SESSION_LOSS_PCT = 15.0     # 🛑 Стоп торгов, если слил $15 за день (спасает от тильта)
+config.FILL_THRESHOLD = 0.90
 
-    use_testnet = True
+use_testnet = True                     # Оставь True для теста. Поставь False, когда закинешь $100.
+
 
     if not all([API_KEY, API_SECRET, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
         logger.warning(
