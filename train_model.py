@@ -20,7 +20,7 @@ except ImportError as e:
 
 def main():
     logger.info("1. Загрузка данных из БД...")
-    conn = sqlite3.connect('smart_money.db')
+    conn = sqlite3.connect('smart_money_train.db')
     
     # Загружаем только закрытые сделки (result_pnl_pct is not null)
     df = pd.read_sql_query("SELECT * FROM ml_training_data WHERE result_pnl_pct IS NOT NULL", conn)

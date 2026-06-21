@@ -84,8 +84,8 @@ TRADFI_SYMBOLS_BLACKLIST = {
 class StrategyConfig:
     """Конфигурация стратегии SMART MONEY — FAST COMPOUND MODE"""
     # Финансовые параметры
-    DEPOSIT: float = 50.0
-    ENTRY_AMOUNT: float = 50.0
+    DEPOSIT: float = 100.0
+    ENTRY_AMOUNT: float = 100.0
     LEVERAGE: int = 10
 
     # Риск-менеджмент
@@ -98,10 +98,10 @@ class StrategyConfig:
     # Цели
     DAILY_TARGET_MIN: float = 10.0
     DAILY_TARGET_MAX: float = 15.0
-    MAX_DAILY_LOSS_PCT: float = 10.0
+    MAX_DAILY_LOSS_PCT: float = 40.0
 
-    MAX_CONCURRENT_POSITIONS: int = 4
-    MAX_SESSION_LOSS_PCT: float = 30.0
+    MAX_CONCURRENT_POSITIONS: int = 12
+    MAX_SESSION_LOSS_PCT: float = 40.0
     FILL_THRESHOLD: float = 0.90
     MAX_SPREAD_PCT: float = 0.05
     TAKER_FEE: float = 0.0004  # 0.04%
@@ -120,7 +120,7 @@ class StrategyConfig:
 
 
     # Параметры сигналов
-    MIN_INDICATORS_SCORE: int = 5  # Возвращаем жесткий фильтр качества
+    MIN_INDICATORS_SCORE: int = 4  # Для скальпинга 4 из 8 достаточно для входа
     TOTAL_INDICATORS: int = 8
 
     # Таймфреймы
@@ -1133,16 +1133,12 @@ class SMCAnalyzer:
                 htf_ema200 = self.calculate_ema(htf_closes, config.HTF_EMA_PERIOD)
                 if htf_ema200:
                     result['ema200'] = htf_ema200[-1]
-                    # Цена ниже EMA200 — лонги ПОЛНОСТЬЮ запрещены
+                    # Цена ниже EMA200 — штрафуем лонг
                     if current_price < htf_ema200[-1]:
-                        long_score = 0
-                        long_ind.clear()
-                        logger.info(f"{symbol}: Лонг запрещён — цена {current_price:.4f} < EMA200 {htf_ema200[-1]:.4f}")
-                    # Цена выше EMA200 — шорты ПОЛНОСТЬЮ запрещены
+                        long_score = max(0, long_score - 1)
+                    # Цена выше EMA200 — штрафуем шорт
                     if current_price > htf_ema200[-1]:
-                        short_score = 0
-                        short_ind.clear()
-                        logger.info(f"{symbol}: Шорт запрещён — цена {current_price:.4f} > EMA200 {htf_ema200[-1]:.4f}")
+                        short_score = max(0, short_score - 1)
 
             # === СТРУКТУРНОЕ ПОДТВЕРЖДЕНИЕ: BOS ИЛИ SMC-зона (FVG/OB) ===
             # Нужен хотя бы один SMC элемент: BOS/CHoCH ИЛИ (FVG/OB)
@@ -1153,7 +1149,7 @@ class SMCAnalyzer:
                     long_ind.get('fvg') or long_ind.get('ob')
                 )
 
-                if not has_smc:
+                if not has_smc and long_score < 5:
                     logger.info(f"{symbol}: Лонг {long_score} баллов, но нет SMC подтверждения (BOS/FVG/OB)")
                     result['score'] = long_score
                     result['direction'] = 'LONG'
@@ -1172,7 +1168,7 @@ class SMCAnalyzer:
                     short_ind.get('fvg') or short_ind.get('ob')
                 )
 
-                if not has_smc:
+                if not has_smc and short_score < 5:
                     logger.info(f"{symbol}: Шорт {short_score} баллов, но нет SMC подтверждения (BOS/FVG/OB)")
                     result['score'] = short_score
                     result['direction'] = 'SHORT'

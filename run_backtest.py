@@ -65,25 +65,9 @@ async def main():
         if vol >= config.MIN_VOLUME_USDT:
             valid_pairs.append(s)
             
-    # 🎯 СПИСОК МОНЕТ ДЛЯ АГРЕССИВНОГО ФЛИППИНГА
-    MEMECOINS = ['PEPE/USDT', 'WIF/USDT', 'BONK/USDT', 'FLOKI/USDT', 'DOGE/USDT', 'SHIB/USDT', 'MYRO/USDT', 'POPCAT/USDT']
-    AI_TOKENS = ['FET/USDT', 'RNDR/USDT', 'AGIX/USDT', 'OCEAN/USDT', 'ARKM/USDT', 'NFP/USDT']
-    GAMING = ['IMX/USDT', 'GALA/USDT', 'SAND/USDT', 'MANA/USDT', 'AXS/USDT', 'ENJ/USDT', 'PIXEL/USDT']
-    L1_L2 = ['SOL/USDT', 'AVAX/USDT', 'NEAR/USDT', 'APT/USDT', 'SUI/USDT', 'SEI/USDT', 'TIA/USDT', 'INJ/USDT', 'OP/USDT', 'ARB/USDT']
-    TRENDING = ['JTO/USDT', 'JUP/USDT', 'STRK/USDT', 'DYM/USDT', 'PYTH/USDT', 'W/USDT', 'ENA/USDT', 'ETHFI/USDT']
-
-    TARGET_COINS = MEMECOINS + AI_TOKENS + GAMING + L1_L2 + TRENDING
-
-    target_pairs = []
-    for s in valid_pairs:
-        base_asset = s.split(':')[0].replace('/USDT', '')
-        if base_asset + '/USDT' in TARGET_COINS or base_asset in [c.split('/')[0] for c in TARGET_COINS]:
-            target_pairs.append(s)
-
-    if len(target_pairs) < 10:
-        logger.warning(f"Найдено только {len(target_pairs)} целевых монет. Добавляем топ по объему...")
-        target_pairs = (target_pairs + valid_pairs)[:30]
-
+    # Теперь тестируем ВЕСЬ РЫНОК (как в реальном боте), а не только 40 монет.
+    target_pairs = valid_pairs
+    
     top_pairs = target_pairs
     logger.info(f"✅ Бэктест на {len(top_pairs)} волатильных альтах (мемкоины, AI, gaming)")
     
@@ -180,7 +164,7 @@ async def main():
                     if len(all_signals) + ml_rejected < 20:
                         logger.info(f"DEBUG prob={prob:.3f} | {symbol} {direction} | score={result.get('score', 0)}")
                     
-                    if prob < 0.55:
+                    if prob < 0.50:
                         ml_rejected += 1
                         continue
                         

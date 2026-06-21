@@ -224,10 +224,11 @@ async def main():
         'options': {'defaultType': 'future'}
     })
     
-    db = Database('smart_money.db')
+    # Используем ОТДЕЛЬНУЮ базу для обучения, чтобы не удалять статистику реального бота!
+    db = Database('smart_money_train.db')
     
     # === ОПТИМИЗАЦИЯ БД: Делаем проверку структуры ОДИН раз при запуске ===
-    conn = sqlite3.connect('smart_money.db')
+    conn = sqlite3.connect('smart_money_train.db')
     cursor = conn.cursor()
     for col, col_type in [
         ('rsi_slope', 'REAL DEFAULT 0'), ('adx_slope', 'REAL DEFAULT 0'),
@@ -389,7 +390,7 @@ async def main():
 
         # === СОХРАНЯЕМ ВСЕ СИГНАЛЫ МОНЕТЫ ОДНИМ МАХОМ ===
         if symbol_signals:
-            conn = sqlite3.connect('smart_money.db')
+            conn = sqlite3.connect('smart_money_train.db')
             cursor = conn.cursor()
             cursor.executemany('''
                 INSERT INTO ml_training_data
