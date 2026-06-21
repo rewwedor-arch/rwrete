@@ -253,8 +253,8 @@ async def main():
         # ========= РЕИНВЕСТ-ПОЗИЦИОНИРОВАНИЕ =========
         # Фиксированная доля от ТЕКУЩЕГО баланса (не от начального).
         # Это и есть настоящий компаундинг: чем больше баланс — тем больше каждая сделка.
-        RISK_PER_TRADE_PCT = 0.30
-        base_amount = current_balance * RISK_PER_TRADE_PCT * weight * ml_weight
+        # Строгое равное деление на слоты
+        base_amount = (current_balance / config.MAX_CONCURRENT_POSITIONS) * weight * ml_weight
         margin = min(base_amount, virtual_free * 0.90)  # Разрешаем загружать до 90% свободной маржи
         
         if margin < config.MIN_SLOT_USDT:

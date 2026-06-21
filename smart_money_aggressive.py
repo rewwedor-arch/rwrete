@@ -100,7 +100,7 @@ class StrategyConfig:
     DAILY_TARGET_MAX: float = 15.0
     MAX_DAILY_LOSS_PCT: float = 10.0
 
-    MAX_CONCURRENT_POSITIONS: int = 12
+    MAX_CONCURRENT_POSITIONS: int = 4
     MAX_SESSION_LOSS_PCT: float = 30.0
     FILL_THRESHOLD: float = 0.90
     MAX_SPREAD_PCT: float = 0.05
@@ -1589,9 +1589,8 @@ class SmartMoneyBot:
             # === ПРОЦЕНТ НА ПОЗИЦИЮ ===
             weight = min(max(score, config.MIN_INDICATORS_SCORE) / 5.0, 1.5)
             
-            # 40% от капитала на сделку — не кидаем всё, но достаточно для ощутимой прибыли
-            # При $50 капитале: 40% = $20 маржа → хороший баланс между риском и прибылью
-            base_amount = virtual_equity * 0.30 
+            # Строгое равное деление на слоты (рекомендация для надежного риск-менеджмента)
+            base_amount = virtual_equity / config.MAX_CONCURRENT_POSITIONS
             
             amount_usdt = base_amount * weight * risk_multiplier
             amount_usdt = min(amount_usdt, virtual_free)
