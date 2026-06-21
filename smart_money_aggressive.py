@@ -3374,16 +3374,23 @@ class SmartMoneyBot:
 
             restored_count = 0
             for ep in exchange_positions:
-                contracts = float(ep.get('contracts', 0) or 0)
+                contracts_val = ep.get('contracts', 0)
+                contracts = float(contracts_val if contracts_val is not None else 0)
                 if abs(contracts) > 0:
                     symbol = ep['symbol']
                     side = 'LONG' if ep.get('side') == 'long' else 'SHORT'
-                    entry_price = float(ep.get('entryPrice', 0))
+                    entry_val = ep.get('entryPrice', 0)
+                    entry_price = float(entry_val if entry_val is not None else 0)
                     
                     # Сначала ищем сделку в БД, чтобы восстановить оригинальные параметры
                     saved_pos = db_positions_map.get(symbol, {})
                     
-                    leverage = int(saved_pos.get('leverage', ep.get('leverage', config.LEVERAGE)))
+                    lev_val = saved_pos.get('leverage')
+                    if lev_val is None:
+                        lev_val = ep.get('leverage')
+                    if lev_val is None:
+                        lev_val = config.LEVERAGE
+                    leverage = int(lev_val)
 
                     if 'amount_usdt' in saved_pos and saved_pos['amount_usdt']:
                         amount_usdt = float(saved_pos['amount_usdt'])
@@ -3398,9 +3405,11 @@ class SmartMoneyBot:
                     for ord in open_orders:
                         o_type = ord.get('type', '').lower()
                         if 'stop' in o_type:
-                            sl_price = float(ord.get('stopPrice') or ord.get('price') or sl_price)
+                            val = ord.get('stopPrice') or ord.get('price')
+                            sl_price = float(val) if val is not None else sl_price
                         elif 'take_profit' in o_type:
-                            tp_price = float(ord.get('stopPrice') or ord.get('price') or tp_price)
+                            val = ord.get('stopPrice') or ord.get('price')
+                            tp_price = float(val) if val is not None else tp_price
 
                     # Подтягиваем оригинальный ID и объем из БД
                     db_id_val = saved_pos.get('id')
@@ -3436,7 +3445,7 @@ class SmartMoneyBot:
                         quantity=original_qty,
                         remaining_quantity=current_qty,
                         timestamp=datetime.now(timezone.utc),
-                        realized_pnl_usd=float(ep.get('realizedPnl', 0)),
+                        realized_pnl_usd=float(ep.get('realizedPnl') or 0.0),
                         partial_tp1_done=tp1_done,
                         partial_tp2_done=tp2_done,
                         partial_tp3_done=tp3_done
