@@ -3403,8 +3403,11 @@ class SmartMoneyBot:
                             tp_price = float(ord.get('stopPrice') or ord.get('price') or tp_price)
 
                     # Подтягиваем оригинальный ID и объем из БД
-                    db_id = int(saved_pos.get('id', int(datetime.now().timestamp() * 1000) + restored_count))
-                    original_qty = float(saved_pos.get('quantity', abs(contracts)))
+                    db_id_val = saved_pos.get('id')
+                    db_id = int(db_id_val) if db_id_val is not None else int(datetime.now().timestamp() * 1000) + restored_count
+                    
+                    original_qty_val = saved_pos.get('quantity')
+                    original_qty = float(original_qty_val) if original_qty_val is not None else abs(contracts)
                     current_qty = abs(contracts)
                     
                     # Восстанавливаем флаги частичных закрытий
