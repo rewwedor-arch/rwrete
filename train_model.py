@@ -49,8 +49,17 @@ def main():
     X = df[feature_columns].fillna(0) # На всякий случай заполняем NaN нулями
 
     # Формируем целевую переменную (Target)
-    # 1 - хорошая сделка (чистый профит > 1.0% с учетом комиссий), 0 - убыточная или "копейки"
-    y = (df['result_pnl_pct'] > 1.0).astype(int)
+    # result_pnl_pct в базе уже умножен на LEVERAGE и 100 (например, +50 означает +50% ROE)
+    # Мы хотим обучать модель только на тех сделках, которые дают минимум +2.0% ROE
+    # Победа = сделка дала больше +5% ROE (минимально значимый результат с учётом комиссий)
+    # Порог 5% даёт ~40-45% положительных примеров → модель не будет выдавать ~0 везде
+    y = (df['result_pnl_pct'] > 5.0).astype(int)
+
+    pos_count = sum(y)
+    neg_count = len(y) - pos_count
+    logger.info(f"Баланс классов в датасете:")
+    logger.info(f"Успешных сделок (>5.0% ROE): {pos_count} ({pos_count/len(y)*100:.1f}%)")
+    logger.info(f"Убыточных или слабых: {neg_count} ({neg_count/len(y)*100:.1f}%)")
 
     logger.info("3. Разделение на обучающую и тестовую выборки (80/20)...")
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)

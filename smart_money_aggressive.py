@@ -86,7 +86,7 @@ class StrategyConfig:
     # Финансовые параметры
     DEPOSIT: float = 50.0
     ENTRY_AMOUNT: float = 50.0
-    LEVERAGE: int = 50
+    LEVERAGE: int = 10
 
     # Риск-менеджмент
     STOP_LOSS_PCT: float = 1.5
@@ -120,7 +120,7 @@ class StrategyConfig:
 
 
     # Параметры сигналов
-    MIN_INDICATORS_SCORE: int = 5  # Ужесточаем вход, так как R/R падает из-за частичных закрытий
+    MIN_INDICATORS_SCORE: int = 5  # Возвращаем жесткий фильтр качества
     TOTAL_INDICATORS: int = 8
 
     # Таймфреймы
@@ -158,9 +158,9 @@ class StrategyConfig:
 
     # Частичные TP (в % ROE)
     PARTIAL_TP_ENABLED: bool = True
-    PARTIAL_TP1_PCT: float = 40.0  # Чуть дальше (4% цены при 10х), чтобы комиссия не съела профит
-    PARTIAL_TP2_PCT: float = 80.0
-    PARTIAL_TP3_PCT: float = 150.0 # Оставляем жирный хвост на случай пампа мемкоина
+    PARTIAL_TP1_PCT: float = 100.0  # Ждем минимум 100% ROE (10% движения цены)
+    PARTIAL_TP2_PCT: float = 200.0  # Удвоение
+    PARTIAL_TP3_PCT: float = 400.0  # Оставляем на туземун
 
     # Время позиции
     POSITION_TIMEOUT_HOURS: float = 8.0
@@ -989,6 +989,12 @@ class SMCAnalyzer:
 
             atr_val = self.calculate_atr(highs_5m, lows_5m, closes_5m, 14)
             result['atr'] = atr_val
+            
+            atr_pct = (atr_val / current_price * 100) if atr_val and current_price > 0 else 0.0
+            if atr_pct < 1.0:
+                logger.info(f"Пропуск {symbol}: слишком низкая волатильность (ATR = {atr_pct:.2f}%)")
+                return result
+
             long_score = 0
             short_score = 0
             long_ind = {}
@@ -1440,7 +1446,7 @@ class SmartMoneyBot:
                     if clean_symbol not in self.symbols_to_scan:
                         self.symbols_to_scan.append(clean_symbol)
 
-
+            # Сканируем весь ликвидный рынок без приоритетов
             logger.info(
                 f"Markets loaded. Загружено: {len(self.symbols_to_scan)} пар.\n"
                 f"Пропущено TradFi: {skipped_tradfi}\n"
@@ -1585,7 +1591,7 @@ class SmartMoneyBot:
             
             # 40% от капитала на сделку — не кидаем всё, но достаточно для ощутимой прибыли
             # При $50 капитале: 40% = $20 маржа → хороший баланс между риском и прибылью
-            base_amount = virtual_equity * 0.40 
+            base_amount = virtual_equity * 0.30 
             
             amount_usdt = base_amount * weight * risk_multiplier
             amount_usdt = min(amount_usdt, virtual_free)
@@ -1694,7 +1700,7 @@ class SmartMoneyBot:
                     # Скармливаем ИИ голый двумерный массив
                     prob = self.ml_model.predict_proba(np.array([ordered_vals]))[0][1]
                     
-                    if prob < 0.50:
+                    if prob < 0.55:
                         msg = f"🧠 AI Фильтр: Сигнал #{symbol} отменен (Вероятность {prob*100:.1f}% < 50%)"
                         logger.info(msg)
                         # Можно раскомментировать, чтобы бот писал об отмене в ТГ:
@@ -1820,27 +1826,26 @@ class SmartMoneyBot:
             )
 
             # FIX #12: сбрасываем кэш баланса после открытия позиции
-        # FIX #12: сбрасываем кэш баланса после открытия позиции
-        self._balance_cache_time = 0
+            self._balance_cache_time = 0
 
-        # 🧠 ДИНАМИЧЕСКИЙ СТОП НА ОСНОВЕ ATR (защита от сквизов мемкоинов)
-        atr_val = smc_result.get('atr', 0)
-        if atr_val > 0 and actual_entry > 0:
-            # Базовый стоп = 1.5 ATR (золотой стандарт для импульсных альтов)
-            sl_dist_atr = atr_val * 1.5
-            sl_dist_pct = (sl_dist_atr / actual_entry) * 100
-            
-            # 🛡 Жёсткие границы (Floor & Ceiling):
-            # Минимум 1.5% (чтобы на BTC/ETH не ставить стоп 0.1%)
-            # Максимум 4.5% (чтобы на шиткоинах стоп не улетал на 15% и не ждал ликвидации)
-            sl_dist_pct = max(1.5, min(sl_dist_pct, 4.5))
-            
-            sl_dist = actual_entry * (sl_dist_pct / 100)
-            logger.info(f"{symbol}: 🧠 Dynamic SL = {sl_dist_pct:.2f}% (ATR={atr_val:.6f})")
-        else:
-            # Фоллбек: если ATR не рассчитался, используем конфиг
-            sl_dist = actual_entry * (config.STOP_LOSS_PCT / 100)
-            logger.warning(f"{symbol}: ATR недоступен, используем фиксированный SL {config.STOP_LOSS_PCT}%")
+            # 🧠 ДИНАМИЧЕСКИЙ СТОП НА ОСНОВЕ ATR (защита от сквизов мемкоинов)
+            atr_val = smc_result.get('atr', 0)
+            if atr_val > 0 and actual_entry > 0:
+                # Базовый стоп = 1.5 ATR (золотой стандарт для импульсных альтов)
+                sl_dist_atr = atr_val * 1.5
+                sl_dist_pct = (sl_dist_atr / actual_entry) * 100
+                
+                # 🛡 Жёсткие границы (Floor & Ceiling):
+                # Минимум 1.5% (чтобы на BTC/ETH не ставить стоп 0.1%)
+                # Максимум 4.5% (чтобы на шиткоинах стоп не улетал на 15% и не ждал ликвидации)
+                sl_dist_pct = max(1.5, min(sl_dist_pct, 4.5))
+                
+                sl_dist = actual_entry * (sl_dist_pct / 100)
+                logger.info(f"{symbol}: 🧠 Dynamic SL = {sl_dist_pct:.2f}% (ATR={atr_val:.6f})")
+            else:
+                # Фоллбек: если ATR не рассчитался, используем конфиг
+                sl_dist = actual_entry * (config.STOP_LOSS_PCT / 100)
+                logger.warning(f"{symbol}: ATR недоступен, используем фиксированный SL {config.STOP_LOSS_PCT}%")
 
             # Твои TP (TP1_PCT и т.д.) в конфиге заданы в ROE. 
             # Чтобы перевести ROE в реальное движение цены, делим на плечо.
@@ -3414,8 +3419,8 @@ class SmartMoneyBot:
                     tp3_done = current_qty <= original_qty * 0.15
 
                     # Высчитываем цены для TP2 и TP3, чтобы бот не закрыл позицию мгновенно при рестарте
-                    calc_tp2_dist = entry_price * (config.TP2_PCT / 100)
-                    calc_tp3_dist = entry_price * (config.TP3_PCT / 100)
+                    calc_tp2_dist = entry_price * (config.PARTIAL_TP2_PCT / config.LEVERAGE / 100)
+                    calc_tp3_dist = entry_price * (config.PARTIAL_TP3_PCT / config.LEVERAGE / 100)
                     fallback_tp2 = entry_price - calc_tp2_dist if side == 'SHORT' else entry_price + calc_tp2_dist
                     fallback_tp3 = entry_price - calc_tp3_dist if side == 'SHORT' else entry_price + calc_tp3_dist
 
@@ -3550,17 +3555,17 @@ async def main():
     USER_CHAT_ID = os.getenv('USER_CHAT_ID')
 
 
-config.DEPOSIT = 100.0                 # Твой реальный депозит
-config.ENTRY_AMOUNT = 100.0
-config.LEVERAGE = 10                   # ⚠️ КРИТИЧНО: 10x! 50x тебя ликвидирует за минуту.
-config.STOP_LOSS_PCT = 2.5             # Фоллбек, если ATR не сработает
-config.REINVEST_PROFITS = True         # Включаем сложный процент (компаундинг)
-config.DRAWDOWN_ALERT = 12.0
-config.MAX_CONCURRENT_POSITIONS = 4    # ⚠️ Максимум 4 сделки. На $100 больше нельзя.
-config.MAX_SESSION_LOSS_PCT = 15.0     # 🛑 Стоп торгов, если слил $15 за день (спасает от тильта)
-config.FILL_THRESHOLD = 0.90
+    config.DEPOSIT = 100.0                 # Твой реальный депозит
+    config.ENTRY_AMOUNT = 100.0
+    config.LEVERAGE = 10                   # ⚠️ КРИТИЧНО: 10x! 50x тебя ликвидирует за минуту.
+    config.STOP_LOSS_PCT = 2.5             # Фоллбек, если ATR не сработает
+    config.REINVEST_PROFITS = True         # Включаем сложный процент (компаундинг)
+    config.DRAWDOWN_ALERT = 12.0
+    config.MAX_CONCURRENT_POSITIONS = 4    # ⚠️ Максимум 4 сделки. На $100 больше нельзя.
+    config.MAX_SESSION_LOSS_PCT = 15.0     # 🛑 Стоп торгов, если слил $15 за день (спасает от тильта)
+    config.FILL_THRESHOLD = 0.90
 
-use_testnet = True                     # Оставь True для теста. Поставь False, когда закинешь $100.
+    use_testnet = True                     # Оставь True для теста. Поставь False, когда закинешь $100.
 
 
     if not all([API_KEY, API_SECRET, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
