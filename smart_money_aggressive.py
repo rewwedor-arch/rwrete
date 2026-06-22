@@ -2556,11 +2556,6 @@ class SmartMoneyBot:
                             )
 
 
-
-
-
-                    # TP3
-                    # TP3
                     # TP3
                     is_tp3_hit = False
                     if position.side == 'LONG' and current_price >= position.tp3_price:
@@ -2571,24 +2566,14 @@ class SmartMoneyBot:
                     if is_tp3_hit and not position.partial_tp3_done:
                         position.partial_tp3_done = True 
 
-                        runner_qty = position.quantity * 0.10
-                        runner_qty = min(runner_qty, position.remaining_quantity)
-                        close_qty = position.remaining_quantity - runner_qty
-                        
-                        if close_qty > 0:
-                            is_success = await self.close_partial_position(position, close_qty, current_price)
-                            if is_success:
-                                # Перенос стопа в точку TP2 (защита раннера как в бэктесте)
-                                new_sl = position.tp2_price
-                                await self._update_exchange_sl(position, new_sl)
-                                await self._update_exchange_tp(position, position.tp3_price)
-                                
-                                await self.send_telegram_message(
-                                    f"💎 TP3 +{config.PARTIAL_TP3_PCT:.0f}% ROE | {pair}\n"
-                                    f"🎯 Оставлен раннер 10% с трейлинг-стопом"
-                                )
-                                position.trailing_active = True
-                                position.trailing_peak = pnl_pct
+                        # Полностью закрываем остаток позиции, как это делает бэктест
+                        reason = (
+                            f"💎 ФИНАЛЬНЫЙ TP3 (+{config.PARTIAL_TP3_PCT:.0f}% ROE)\n"
+                            f"🎯 Позиция полностью зафиксирована"
+                        )
+                        await self.close_position(position_id, reason=reason)
+                        continue  # Прерываем итерацию, так как сделка уже закрыта
+
 
                     # === ТАЙМАУТ И МЕДЛЕННЫЙ МИНУС ===
                     await self.check_position_timeout(position)
