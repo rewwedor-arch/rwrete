@@ -991,7 +991,7 @@ class SMCAnalyzer:
             result['atr'] = atr_val
             
             atr_pct = (atr_val / current_price * 100) if atr_val and current_price > 0 else 0.0
-            if atr_pct < 1.0:
+            if atr_pct < 0.3:
                 logger.info(f"Пропуск {symbol}: слишком низкая волатильность (ATR = {atr_pct:.2f}%)")
                 return result
 
