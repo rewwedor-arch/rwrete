@@ -1186,10 +1186,26 @@ class SMCAnalyzer:
 
             # === ФИЧА 1: ORDER BOOK IMBALANCE FILTER ===
             if result['signal']:
-                imbalance = await self.analyze_order_book(symbol)
+                # Запрашиваем сырые свечи Binance для Taker Buy Volume (строго как в бэктесте)
+                try:
+                    clean_symbol = symbol.split(':')[0].replace('/', '')
+                    raw_klines = await self.exchange.fapiPublicGetKlines({
+                        'symbol': clean_symbol, 
+                        'interval': config.SCANNER_TIMEFRAME, 
+                        'limit': 1
+                    })
+                    last_kline = raw_klines[-1]
+                    taker_buy_volume = float(last_kline[9])
+                    total_volume = float(last_kline[5])
+                    taker_sell_volume = total_volume - taker_buy_volume
+                    imbalance = taker_buy_volume / max(taker_sell_volume, 1e-9)
+                except Exception as e:
+                    logger.warning(f"Не удалось получить объемы для imbalance: {e}")
+                    imbalance = 1.0
+                    
                 result['order_book_imbalance'] = imbalance
 
-                # Раньше тут стоял ручной фильтр по стакану. 
+                # Раньше тут стоял ручной фильтр по стакану.  
                 # Теперь мы передаем эти данные в ML-модель, и она сама решает,
                 # блокировать сделку или нет, учитывая все остальные факторы!
             # === ФИЧА 3: FEATURES DICT ДЛЯ ML (РАСШИРЕННЫЙ) ===
@@ -1692,8 +1708,11 @@ class SmartMoneyBot:
                         float(f_dict.get('macd_histogram', 0.0)),
                     ]
                     
-                    # Скармливаем ИИ голый двумерный массив
-                    prob = self.ml_model.predict_proba(np.array([ordered_vals]))[0][1]
+                    # Оборачиваем в Pandas DataFrame, чтобы передать имена колонок (как при обучении)
+                    import pandas as pd
+                    features_df = pd.DataFrame([ordered_vals], columns=self.ml_model.feature_names_in_)
+                    prob = self.ml_model.predict_proba(features_df)[0][1]
+
                     
                     if prob < 0.50:
                         msg = f"🧠 AI Фильтр: Сигнал #{symbol} отменен (Вероятность {prob*100:.1f}% < 50%)"
@@ -1702,14 +1721,15 @@ class SmartMoneyBot:
                         # await self.send_telegram_message(msg)
                         return None
                     
+                    # СДВИНУТО ВПРАВО:
                     ai_prob_str = f"🧠 AI Уверенность: {prob*100:.1f}%\n"
                     
-                    if prob >= 0.80:
-                        logger.info(f"{symbol}: ИИ уверен ({prob*100:.1f}%) -> повышаем риск x1.5")
-                        risk_mult = 1.5
+                    # СДВИНУТО ВПРАВО:
+                    risk_mult = prob / 0.70
                         
                 except Exception as e:
                     logger.warning(f"Ошибка предсказания ML: {e}")
+
                     # ВАЖНО: Отправляем ошибку в ТГ, чтобы больше не гадать, почему ИИ молчит!
                     await self.send_telegram_message(f"⚠️ Ошибка ML: {e}")
             # ------------------------
@@ -2525,13 +2545,11 @@ class SmartMoneyBot:
                         position.partial_tp2_done = True
                         is_success = await self.close_partial_position(position, position.remaining_quantity * 0.50, current_price)
                         if is_success:
-                            # Перенос стопа в +10% ROE
-                            sl_pct_tp2 = 10.0 / position.leverage / 100
-                            new_sl = (position.entry_price * (1 - sl_pct_tp2)
-                                      if position.side == 'SHORT'
-                                      else position.entry_price * (1 + sl_pct_tp2))
+                            # Перенос стопа в точку TP1 (как в бэктесте)
+                            new_sl = position.take_profit
                             await self._update_exchange_sl(position, new_sl)
                             await self._update_exchange_tp(position, position.tp3_price)
+
                             
                             await self.send_telegram_message(
                                 f"🚀 TP2 | {pair}\nДостигнута вторая цель! Закрыто ещё 30% | SL → +40% ROE"
@@ -2560,11 +2578,8 @@ class SmartMoneyBot:
                         if close_qty > 0:
                             is_success = await self.close_partial_position(position, close_qty, current_price)
                             if is_success:
-                                # Перенос стопа в +30% ROE (защита раннера)
-                                sl_pct_tp3 = 30.0 / position.leverage / 100
-                                new_sl = (position.entry_price * (1 - sl_pct_tp3)
-                                          if position.side == 'SHORT'
-                                          else position.entry_price * (1 + sl_pct_tp3))
+                                # Перенос стопа в точку TP2 (защита раннера как в бэктесте)
+                                new_sl = position.tp2_price
                                 await self._update_exchange_sl(position, new_sl)
                                 await self._update_exchange_tp(position, position.tp3_price)
                                 
@@ -2614,6 +2629,17 @@ class SmartMoneyBot:
                     )
                     await self.close_position(position.id, reason=momentum_reason)
 
+            # БЛОК СДВИНУТ ВПРАВО НА 4 ПРОБЕЛА
+            if duration_minutes >= config.BAD_POSITION_TIMEOUT_MINUTES:
+                if pnl_pct <= config.MAX_POSITION_LOSS_PCT: # -22.0% ROE
+                    reason = (
+                        f"🗑 BAD TRADE EXIT (Быстрый слив)\n"
+                        f"Возраст: {duration_minutes:.0f} мин | PNL: {pnl_pct:.2f}%"
+                    )
+                    await self.close_position(position.id, reason=reason)
+                    return
+
+
         except Exception as e:
             logger.error(f"Ошибка timeout-проверки: {e}")
 
@@ -2630,6 +2656,8 @@ class SmartMoneyBot:
             if self.signals_today >= self.max_signals_per_day:
                 logger.info(f"Лимит сигналов исчерпан: {self.signals_today}")
                 return
+
+
                 
             # --- ФИЛЬТР ПО ВРЕМЕНИ (ЗАЩИТА ОТ НОЧНОГО РЫНКА) ---
             if config.RESTRICT_HOURS:
@@ -3472,7 +3500,8 @@ class SmartMoneyBot:
             asyncio.create_task(task_with_log("monitoring", self.run_monitoring_loop())),
             asyncio.create_task(task_with_log("daily_report", self.run_daily_report_loop())),
             asyncio.create_task(task_with_log("hourly_report", self.run_hourly_report_loop())),
-            asyncio.create_task(task_with_log("telegram", self.run_telegram_bot()))
+            asyncio.create_task(task_with_log("telegram", self.run_telegram_bot())),
+            asyncio.create_task(task_with_log("fear_greed", check_fear_greed_index(self)))
         ]
 
         # Функция отправит сообщение через 3 секунды, когда Telegram-клиент полностью подключится
