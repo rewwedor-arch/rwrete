@@ -1796,7 +1796,7 @@ class SmartMoneyBot:
                     raise res 
                     
                 if 'leverage' in err_str.lower() or '-2027' in err_str or 'Exceeded' in err_str:
-                    for fallback_lev in [50, 25, 20, 10, 5]:
+                    for fallback_lev in [10, 8, 5, 3, 2]:
                         logger.info(f"Снижаем плечо до {fallback_lev}x для {symbol} из-за лимитов биржи...")
                         fallback_res = await try_open_with_leverage(fallback_lev)
                         if not isinstance(fallback_res, Exception):
@@ -2552,7 +2552,7 @@ class SmartMoneyBot:
 
                             
                             await self.send_telegram_message(
-                                f"🚀 TP2 | {pair}\nДостигнута вторая цель! Закрыто ещё 30% | SL → +40% ROE"
+                                f"🚀 TP2 | {pair}\nДостигнута вторая цель! Закрыто ещё 30% | SL → +{config.PARTIAL_TP1_PCT:.0f}% ROE (TP1)"
                             )
 
 
@@ -2616,7 +2616,7 @@ class SmartMoneyBot:
 
             # БЛОК СДВИНУТ ВПРАВО НА 4 ПРОБЕЛА
             if duration_minutes >= config.BAD_POSITION_TIMEOUT_MINUTES:
-                if pnl_pct <= config.MAX_POSITION_LOSS_PCT: # -22.0% ROE
+                if pnl_pct <= config.MAX_POSITION_LOSS_PCT:
                     reason = (
                         f"🗑 BAD TRADE EXIT (Быстрый слив)\n"
                         f"Возраст: {duration_minutes:.0f} мин | PNL: {pnl_pct:.2f}%"
