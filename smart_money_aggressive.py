@@ -1695,7 +1695,7 @@ class SmartMoneyBot:
                     # Скармливаем ИИ голый двумерный массив
                     prob = self.ml_model.predict_proba(np.array([ordered_vals]))[0][1]
                     
-                    if prob < 0.55:
+                    if prob < 0.50:
                         msg = f"🧠 AI Фильтр: Сигнал #{symbol} отменен (Вероятность {prob*100:.1f}% < 50%)"
                         logger.info(msg)
                         # Можно раскомментировать, чтобы бот писал об отмене в ТГ:
@@ -3565,11 +3565,11 @@ async def main():
     config.DEPOSIT = 100.0                 # Твой реальный депозит
     config.ENTRY_AMOUNT = 100.0
     config.LEVERAGE = 10                   # ⚠️ КРИТИЧНО: 10x! 50x тебя ликвидирует за минуту.
-    config.STOP_LOSS_PCT = 2.5             # Фоллбек, если ATR не сработает
+    config.STOP_LOSS_PCT = 1.5             # Фоллбек, если ATR не сработает
     config.REINVEST_PROFITS = True         # Включаем сложный процент (компаундинг)
     config.DRAWDOWN_ALERT = 12.0
-    config.MAX_CONCURRENT_POSITIONS = 4    # ⚠️ Максимум 4 сделки. На $100 больше нельзя.
-    config.MAX_SESSION_LOSS_PCT = 15.0     # 🛑 Стоп торгов, если слил $15 за день (спасает от тильта)
+    config.MAX_CONCURRENT_POSITIONS = 12    # ⚠️ Максимум 4 сделки. На $100 больше нельзя.
+    config.MAX_SESSION_LOSS_PCT = 40.0     # 🛑 Стоп торгов, если слил $15 за день (спасает от тильта)
     config.FILL_THRESHOLD = 0.90
 
     use_testnet = True                     # Оставь True для теста. Поставь False, когда закинешь $100.
