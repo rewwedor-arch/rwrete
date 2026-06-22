@@ -1648,14 +1648,14 @@ class SmartMoneyBot:
             return None
 
         # Фича 2: При Extreme Fear блокируем ЛОНГИ по альткоинам, ШОРТЫ разрешены
-        direction = smc_result.get('direction', 'LONG')
-        is_btc = symbol.upper().startswith('BTC')
-        if not ALLOW_LONG_ALTS and direction == 'LONG' and not is_btc:
-            logger.info(
-                f"Сигнал ЛОНГ {symbol} заблокирован — Extreme Fear "
-                f"(F&G={FEAR_GREED_VALUE}), только ШОРТЫ разрешены для альткоинов"
-            )
-            return None
+        #direction = smc_result.get('direction', 'LONG')
+        #is_btc = symbol.upper().startswith('BTC')
+        #if not ALLOW_LONG_ALTS and direction == 'LONG' and not is_btc:
+            #logger.info(
+                #f"Сигнал ЛОНГ {symbol} заблокирован — Extreme Fear "
+                #f"(F&G={FEAR_GREED_VALUE}), только ШОРТЫ разрешены для альткоинов"
+            #)
+            #return None
 
         if self.is_session_loss_limit_reached():
             logger.warning(f"MAX_SESSION_LOSS достигнут — все сделки заблокированы")
