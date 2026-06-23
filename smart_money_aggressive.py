@@ -1853,10 +1853,22 @@ class SmartMoneyBot:
             # --- КОНЕЦ БЛОКА ---
 
 
+            # --- ИСПРАВЛЕНИЕ: Жесткая проверка статуса и объемов ---
+            status = order.get('status', '').lower()
+            if status in ['rejected', 'expired', 'canceled']:
+                logger.warning(f"Ордер {symbol} отклонён биржей (статус: {status})")
+                return None
+
+            filled = order.get('filled')
+            # Если биржа явно вернула 0.0, мы не подменяем его на quantity
+            actual_qty = float(filled) if filled is not None else quantity
+            
             actual_entry = float(order.get('average') or order.get('price') or entry_price)
-            actual_qty = float(order.get('filled') or quantity)
+            if actual_entry <= 0:
+                actual_entry = entry_price
 
             if actual_qty < quantity * config.FILL_THRESHOLD:
+
                 logger.warning(
                     f"Partial fill {symbol}: заполнено {actual_qty:.4f} из {quantity:.4f} "
                     f"({actual_qty / quantity * 100:.1f}%) — позиция не открывается"
