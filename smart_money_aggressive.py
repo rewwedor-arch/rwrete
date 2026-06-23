@@ -2328,13 +2328,12 @@ class SmartMoneyBot:
             # Делаем 3 попытки, если биржа глючит (Testnet этим славится)
             for attempt in range(3):
                 try:
-                    open_orders = await self.exchange.fetch_open_orders(position.symbol)
-                    for ord in open_orders:
-                        if 'stop' in ord.get('type', '').lower():
-                            await self.exchange.cancel_order(ord['id'], position.symbol)
+                    # Сносим ВСЕ старые ордера махом, чтобы биржа не ругалась на лимиты
+                    await self.exchange.cancel_all_orders(position.symbol)
                             
                     await self.exchange.create_order(
                         symbol=position.symbol,
+
                         type='STOP_MARKET',
                         side=close_side,
                         amount=qty_rounded,
