@@ -333,6 +333,16 @@ class Database:
             )
         ''')
 
+        # --- МИГРАЦИЯ БД (Добавляем колонки для памяти частичных закрытий) ---
+        try:
+            cursor.execute('ALTER TABLE positions ADD COLUMN remaining_quantity REAL')
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute('ALTER TABLE positions ADD COLUMN realized_pnl_usd REAL DEFAULT 0.0')
+        except sqlite3.OperationalError:
+            pass
+
         conn.commit()
 
         try:
@@ -390,6 +400,16 @@ class Database:
         positions = [dict(row) for row in cursor.fetchall()]
         conn.close()
         return positions
+    def update_position_partial(self, position_id: int, remaining_quantity: float, realized_pnl_usd: float, amount_usdt: float):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE positions
+            SET remaining_quantity = ?, realized_pnl_usd = ?, amount_usdt = ?
+            WHERE id = ?
+        ''', (remaining_quantity, realized_pnl_usd, amount_usdt, position_id))
+        conn.commit()
+        conn.close()
 
     def add_signal(self, symbol: str, signal_type: str, entry_price: float,
                    smc_score: int, indicators: dict) -> int:
@@ -1500,15 +1520,35 @@ class SmartMoneyBot:
         except Exception:
             return False
 
-    def is_session_loss_limit_reached(self) -> bool:
+    async def is_session_loss_limit_reached(self) -> bool:
         try:
             stats = self.db.get_daily_statistics()
-            if not stats:
-                return False
-            daily_pct = float(stats.get('total_pnl_pct') or 0.0)
+            daily_closed_pnl = float(stats.get('total_pnl') or 0.0) if stats else 0.0
+            
+            # Добавляем плавающий (unrealized) убыток по открытым сделкам
+            floating_pnl = 0.0
+            for pos in self.positions.values():
+                try:
+                    ticker = await self.exchange.fetch_ticker(pos.symbol)
+                    current_price = ticker['last']
+                    rem = max(pos.remaining_quantity, 0.0)
+                    if pos.side == 'SHORT':
+                        u_pnl = (pos.entry_price - current_price) * rem
+                    else:
+                        u_pnl = (current_price - pos.entry_price) * rem
+                    fee = rem * current_price * config.TAKER_FEE
+                    floating_pnl += (pos.realized_pnl_usd + u_pnl - fee)
+                except Exception:
+                    pass
+            
+            total_day_pnl = daily_closed_pnl + floating_pnl
+            daily_pct = (total_day_pnl / config.DEPOSIT) * 100 if config.DEPOSIT > 0 else 0.0
+            
             return daily_pct <= -abs(config.MAX_SESSION_LOSS_PCT)
-        except Exception:
+        except Exception as e:
+            logger.error(f"Ошибка проверки лимита сессии: {e}")
             return False
+
 
     async def check_spread(self, symbol: str) -> bool:
         try:
@@ -1656,8 +1696,10 @@ class SmartMoneyBot:
                 #f"(F&G={FEAR_GREED_VALUE}), только ШОРТЫ разрешены для альткоинов"
             #)
             #return None
+       
+        # СТАЛО:
+        if await self.is_session_loss_limit_reached():
 
-        if self.is_session_loss_limit_reached():
             logger.warning(f"MAX_SESSION_LOSS достигнут — все сделки заблокированы")
             return None
 
@@ -2286,11 +2328,20 @@ class SmartMoneyBot:
             chunk_pnl -= fee
 
             position.realized_pnl_usd += chunk_pnl
+            
+            # --- ИСПРАВЛЕНИЕ: Корректируем маржу и остаток ---
+            closed_fraction = qty_to_close / position.remaining_quantity
+            margin_reduction = position.amount_usdt * closed_fraction
+            position.amount_usdt = max(0.0, position.amount_usdt - margin_reduction)
             position.remaining_quantity = max(0.0, position.remaining_quantity - qty_to_close)
 
-            
-            # Корректируем заблокированную маржу пропорционально закрытому объему
-
+            # --- ИСПРАВЛЕНИЕ: Сохраняем прогресс в БД ---
+            self.db.update_position_partial(
+                position.id, 
+                position.remaining_quantity, 
+                position.realized_pnl_usd, 
+                position.amount_usdt
+            )
 
             logger.info(
 
@@ -2659,7 +2710,10 @@ class SmartMoneyBot:
                         logger.info(f"💤 Ночной режим. Торги приостановлены до {config.TRADE_START_HOUR_UTC}:00 UTC (Текущий час: {current_hour}:00 UTC)")
                     return
 
-            if self.is_session_loss_limit_reached():
+           
+            # СТАЛО:
+            if await self.is_session_loss_limit_reached():
+
                 logger.warning(
                     f"MAX_SESSION_LOSS {config.MAX_SESSION_LOSS_PCT}% достигнут — сканирование остановлено"
                 )
