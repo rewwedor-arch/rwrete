@@ -1854,18 +1854,27 @@ class SmartMoneyBot:
 
 
             # --- ИСПРАВЛЕНИЕ: Жесткая проверка статуса и объемов ---
-            status = order.get('status', '').lower()
-            if status in ['rejected', 'expired', 'canceled']:
-                logger.warning(f"Ордер {symbol} отклонён биржей (статус: {status})")
+            # --- ИСПРАВЛЕНИЕ: ЖЕЛЕЗОБЕТОННАЯ ПРОВЕРКА ИСПОЛНЕНИЯ ---
+            if 'id' in order:
+                try:
+                    await asyncio.sleep(0.5) # Ждем полсекунды, чтобы биржа успела свести ордер
+                    fetched_order = await self.exchange.fetch_order(order['id'], symbol)
+                    order = fetched_order
+                except Exception:
+                    pass
+
+            filled_val = order.get('filled')
+            # СТРОГО берем то, что дала биржа, или 0.0. Никаких подстановок quantity!
+            actual_qty = float(filled_val) if filled_val is not None else 0.0
+            
+            if actual_qty <= 0.0:
+                logger.warning(f"❌ Ордер {symbol} не исполнился (пустой стакан Testnet). Отмена сделки.")
                 return None
 
-            filled = order.get('filled')
-            # Если биржа явно вернула 0.0, мы не подменяем его на quantity
-            actual_qty = float(filled) if filled is not None else quantity
-            
             actual_entry = float(order.get('average') or order.get('price') or entry_price)
             if actual_entry <= 0:
                 actual_entry = entry_price
+
 
             if actual_qty < quantity * config.FILL_THRESHOLD:
 
