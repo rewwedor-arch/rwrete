@@ -118,9 +118,13 @@ async def main():
                     idx_1h += 1
                 
 
-            while idx_1h < len(klines_1h) and klines_1h[idx_1h][0] <= timestamp:
-                idx_1h += 1
-            current_1h = klines_1h[max(0, idx_1h - 250):idx_1h]
+                while idx_1h < len(klines_1h) and klines_1h[idx_1h][0] <= timestamp:
+                    idx_1h += 1
+                
+                current_1h = klines_1h[max(0, idx_1h - 250):idx_1h]
+                if len(current_1h) < 200:
+                    continue
+
 
 
                 if len(current_1h) < 200:
