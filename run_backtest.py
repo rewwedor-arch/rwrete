@@ -168,9 +168,11 @@ async def main():
                         float(f_dict.get('macd_histogram', 0.0)),
                     ]
                     
-    import warnings
-    warnings.filterwarnings("ignore")
-    prob = model.predict_proba([ordered_vals])[0][1]
+                    features_df = pd.DataFrame([ordered_vals], columns=model.feature_names_in_)
+                    prob = model.predict_proba(features_df)[0][1]
+
+
+
 
                     
                     # DEBUG: показываем вероятность первых 20 сигналов — чтобы видеть что даёт модель
