@@ -108,25 +108,14 @@ async def main():
                 if i < skip_until_index:
                     continue
                     
-                # Берем только последние 250 свечей! Этого хватит для EMA200, RSI и ADX.
                 current_15m = klines_15m[max(0, i - 250):i]
-
                 timestamp = current_15m[-1][0]
                 date_str = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc).strftime('%Y-%m-%d')
                 
                 while idx_1h < len(klines_1h) and klines_1h[idx_1h][0] <= timestamp:
                     idx_1h += 1
                 
-
-                while idx_1h < len(klines_1h) and klines_1h[idx_1h][0] <= timestamp:
-                    idx_1h += 1
-                
                 current_1h = klines_1h[max(0, idx_1h - 250):idx_1h]
-                if len(current_1h) < 200:
-                    continue
-
-
-
                 if len(current_1h) < 200:
                     continue
                     
@@ -170,12 +159,7 @@ async def main():
                     
                     features_df = pd.DataFrame([ordered_vals], columns=model.feature_names_in_)
                     prob = model.predict_proba(features_df)[0][1]
-
-
-
-
                     
-                    # DEBUG: показываем вероятность первых 20 сигналов — чтобы видеть что даёт модель
                     if len(all_signals) + ml_rejected < 20:
                         logger.info(f"DEBUG prob={prob:.3f} | {symbol} {direction} | score={result.get('score', 0)}")
                     
@@ -205,6 +189,7 @@ async def main():
         except Exception as e:
             logger.error(f"Ошибка при обработке {symbol}: {e}")
             continue
+
 
     logger.info(f"\n{'='*50}\nХРОНОЛОГИЧЕСКАЯ СИМУЛЯЦИЯ (Всего сигналов: {len(all_signals)})\n{'='*50}")
     
