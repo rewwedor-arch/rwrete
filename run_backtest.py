@@ -66,7 +66,7 @@ async def main():
             valid_pairs.append(s)
             
     # Теперь тестируем ВЕСЬ РЫНОК (как в реальном боте), а не только 40 монет.
-    target_pairs = valid_pairs
+    target_pairs = valid_pairs[:10]
     
     top_pairs = target_pairs
     logger.info(f"✅ Бэктест на {len(top_pairs)} волатильных альтах (мемкоины, AI, gaming)")
@@ -168,8 +168,10 @@ async def main():
                         float(f_dict.get('macd_histogram', 0.0)),
                     ]
                     
-                    features_df = pd.DataFrame([ordered_vals], columns=model.feature_names_in_)
-                    prob = model.predict_proba(features_df)[0][1]
+    import warnings
+    warnings.filterwarnings("ignore")
+    prob = model.predict_proba([ordered_vals])[0][1]
+
                     
                     # DEBUG: показываем вероятность первых 20 сигналов — чтобы видеть что даёт модель
                     if len(all_signals) + ml_rejected < 20:
