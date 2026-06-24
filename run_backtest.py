@@ -108,14 +108,20 @@ async def main():
                 if i < skip_until_index:
                     continue
                     
-                current_15m = klines_15m[:i]
+                # Берем только последние 250 свечей! Этого хватит для EMA200, RSI и ADX.
+                current_15m = klines_15m[max(0, i - 250):i]
+
                 timestamp = current_15m[-1][0]
                 date_str = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc).strftime('%Y-%m-%d')
                 
                 while idx_1h < len(klines_1h) and klines_1h[idx_1h][0] <= timestamp:
                     idx_1h += 1
                 
-                current_1h = klines_1h[:idx_1h]
+
+                while idx_1h < len(klines_1h) and klines_1h[idx_1h][0] <= timestamp:
+    idx_1h += 1
+current_1h = klines_1h[max(0, idx_1h - 250):idx_1h]
+
                 if len(current_1h) < 200:
                     continue
                     
