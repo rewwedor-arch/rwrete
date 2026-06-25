@@ -95,19 +95,27 @@ def simulate_trade(direction, entry_price, atr, future_candles):
         tp2_dist = tp1_dist * 2  # недостижимо
         tp3_dist = tp1_dist * 3
 
+    # Дистанция до ликвидации (чуть меньше 100% маржи из-за комиссий поддержания)
+    liq_dist_pct = (100.0 / config.LEVERAGE) * 0.95 
+    liq_dist = entry_price * (liq_dist_pct / 100.0)
+
     if direction == 'LONG':
         sl = entry_price - sl_dist
+        liq_price = entry_price - liq_dist
         tp1 = entry_price + tp1_dist
         tp2 = entry_price + tp2_dist
         tp3 = entry_price + tp3_dist
     else:
         sl = entry_price + sl_dist
+        liq_price = entry_price + liq_dist
         tp1 = entry_price - tp1_dist
         tp2 = entry_price - tp2_dist
         tp3 = entry_price - tp3_dist
 
     qty = 1.0
     realized_pnl = 0.0
+    trailing_active = False
+    trailing_peak = 0.0
     
     for idx, f_candle in enumerate(future_candles):
         high = f_candle[2]
@@ -116,9 +124,15 @@ def simulate_trade(direction, entry_price, atr, future_candles):
         duration_minutes = (idx + 1) * 15
         
         if direction == 'LONG':
-            # 1. Проверка стоп-лосса и тейк-профитов (срабатывают мгновенно внутри свечи)
+            # 1. Проверка стоп-лосса (Срабатывает первым, если он ближе к точке входа)
             if low <= sl:
                 realized_pnl += (sl - entry_price) / entry_price * qty
+                qty = 0
+                break
+                
+            # 2. ПРОВЕРКА ЛИКВИДАЦИИ (если стоп не спас или его не было)
+            if low <= liq_price:
+                realized_pnl -= (1.0 / config.LEVERAGE) * qty # Фиксируем убыток -100%
                 qty = 0
                 break
             if qty > 0 and high >= tp1:
@@ -138,6 +152,23 @@ def simulate_trade(direction, entry_price, atr, future_candles):
                 realized_pnl += (tp3 - entry_price) / entry_price * qty
                 qty = 0
                 break
+
+            # Trailing Stop Logic (Check drawdown BEFORE updating peak to avoid lookahead bias)
+            if trailing_active:
+                current_floating_pnl_pct = (low - entry_price) / entry_price * config.LEVERAGE * 100.0
+                trailing_drawdown = trailing_peak - current_floating_pnl_pct
+                
+                if trailing_drawdown >= config.TRAILING_DRAWDOWN_CLOSE_PCT:
+                    exit_price = entry_price * (1 + (trailing_peak - config.TRAILING_DRAWDOWN_CLOSE_PCT) / 100.0 / config.LEVERAGE)
+                    realized_pnl += (exit_price - entry_price) / entry_price * qty
+                    qty = 0
+                    break
+
+            peak_floating_pnl_pct = (high - entry_price) / entry_price * config.LEVERAGE * 100.0
+            if peak_floating_pnl_pct >= config.TRAILING_ACTIVATE_PCT:
+                trailing_active = True
+                if peak_floating_pnl_pct > trailing_peak:
+                    trailing_peak = peak_floating_pnl_pct
 
             # Считаем текущий плавающий PNL по цене закрытия свечи
             floating_pnl_pct = (close - entry_price) / entry_price * config.LEVERAGE * 100.0
@@ -159,9 +190,15 @@ def simulate_trade(direction, entry_price, atr, future_candles):
                 break
                 
         else: # SHORT
-            # 1. Проверка стоп-лосса и тейк-профитов (срабатывают мгновенно внутри свечи)
+            # 1. Проверка стоп-лосса (Срабатывает первым, если он ближе к точке входа)
             if high >= sl:
                 realized_pnl += (entry_price - sl) / entry_price * qty
+                qty = 0
+                break
+                
+            # 2. ПРОВЕРКА ЛИКВИДАЦИИ 
+            if high >= liq_price:
+                realized_pnl -= (1.0 / config.LEVERAGE) * qty # Фиксируем убыток -100%
                 qty = 0
                 break
             if qty > 0 and low <= tp1:
@@ -181,6 +218,23 @@ def simulate_trade(direction, entry_price, atr, future_candles):
                 realized_pnl += (entry_price - tp3) / entry_price * qty
                 qty = 0
                 break
+
+            # Trailing Stop Logic (Check drawdown BEFORE updating peak to avoid lookahead bias)
+            if trailing_active:
+                current_floating_pnl_pct = (entry_price - high) / entry_price * config.LEVERAGE * 100.0
+                trailing_drawdown = trailing_peak - current_floating_pnl_pct
+                
+                if trailing_drawdown >= config.TRAILING_DRAWDOWN_CLOSE_PCT:
+                    exit_price = entry_price * (1 - (trailing_peak - config.TRAILING_DRAWDOWN_CLOSE_PCT) / 100.0 / config.LEVERAGE)
+                    realized_pnl += (entry_price - exit_price) / entry_price * qty
+                    qty = 0
+                    break
+
+            peak_floating_pnl_pct = (entry_price - low) / entry_price * config.LEVERAGE * 100.0
+            if peak_floating_pnl_pct >= config.TRAILING_ACTIVATE_PCT:
+                trailing_active = True
+                if peak_floating_pnl_pct > trailing_peak:
+                    trailing_peak = peak_floating_pnl_pct
 
             # Считаем текущий плавающий PNL по цене закрытия свечи
             floating_pnl_pct = (entry_price - close) / entry_price * config.LEVERAGE * 100.0

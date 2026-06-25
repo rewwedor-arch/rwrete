@@ -65,17 +65,19 @@ async def main():
         if vol >= config.MIN_VOLUME_USDT:
             valid_pairs.append(s)
             
-    # Теперь тестируем ВЕСЬ РЫНОК (как в реальном боте), а не только 40 монет.
-    target_pairs = valid_pairs[:10]
+    # Теперь тестируем ВСЕ монеты, которые прошли фильтр объема (как в реальном боте).
+    target_pairs = valid_pairs
     
     top_pairs = target_pairs
-    logger.info(f"✅ Бэктест на {len(top_pairs)} волатильных альтах (мемкоины, AI, gaming)")
+    logger.info(f"✅ Бэктест на {len(top_pairs)} волатильных альтах (ВЕСЬ рынок, кроме мусора)")
     
     fg_data = await get_fear_and_greed()
     analyzer = BacktestAnalyzer(exchange)
     
-    days = 30 # Бэктест за последние 30 дней
-    since_ms = int((datetime.now(timezone.utc) - timedelta(days=days)).timestamp() * 1000)
+    days = 30 # Длительность бэктеста в днях
+    offset_days = 30 # Сдвиг в прошлое (0 = последний месяц, 30 = предыдущий месяц, 60 = два месяца назад)
+    
+    since_ms = int((datetime.now(timezone.utc) - timedelta(days=days + offset_days)).timestamp() * 1000)
     limit_15m = days * 24 * 4
     limit_1h = days * 24
     
@@ -163,7 +165,7 @@ async def main():
                     if len(all_signals) + ml_rejected < 20:
                         logger.info(f"DEBUG prob={prob:.3f} | {symbol} {direction} | score={result.get('score', 0)}")
                     
-                    if prob < 0.50:
+                    if prob < 0.40:
                         ml_rejected += 1
                         continue
                         
@@ -238,7 +240,7 @@ async def main():
         # Фиксированная доля от ТЕКУЩЕГО баланса (не от начального).
         # Это и есть настоящий компаундинг: чем больше баланс — тем больше каждая сделка.
         # Строгое равное деление на слоты
-        base_amount = (current_balance / config.MAX_CONCURRENT_POSITIONS) * weight * ml_weight
+        base_amount = max((current_balance / config.MAX_CONCURRENT_POSITIONS) * weight * ml_weight, config.MIN_SLOT_USDT)
         margin = min(base_amount, virtual_free * 0.90)  # Разрешаем загружать до 90% свободной маржи
         
         if margin < config.MIN_SLOT_USDT:

@@ -86,10 +86,10 @@ class StrategyConfig:
     # Финансовые параметры
     DEPOSIT: float = 100.0
     ENTRY_AMOUNT: float = 100.0
-    LEVERAGE: int = 10
+    LEVERAGE: int = 25
 
     # Риск-менеджмент
-    STOP_LOSS_PCT: float = 1.5
+    STOP_LOSS_PCT: float = 1.0
     TAKE_PROFIT_PCT: float = 2.5
     TAKE_PROFIT: float = 4.0
     TP2_PCT: float = 4.0
@@ -98,10 +98,10 @@ class StrategyConfig:
     # Цели
     DAILY_TARGET_MIN: float = 10.0
     DAILY_TARGET_MAX: float = 15.0
-    MAX_DAILY_LOSS_PCT: float = 40.0
+    MAX_DAILY_LOSS_PCT: float = 30.0
 
-    MAX_CONCURRENT_POSITIONS: int = 12
-    MAX_SESSION_LOSS_PCT: float = 40.0
+    MAX_CONCURRENT_POSITIONS: int = 10
+    MAX_SESSION_LOSS_PCT: float = 35.0
     FILL_THRESHOLD: float = 0.90
     MAX_SPREAD_PCT: float = 0.05
     TAKER_FEE: float = 0.0004  # 0.04%
@@ -137,8 +137,8 @@ class StrategyConfig:
     DRAWDOWN_ALERT: float = 12.0
 
     # Momentum exit
-    MOMENTUM_EXIT_MINUTES: int = 45
-    MOMENTUM_MIN_PROFIT: float = 1.0
+    MOMENTUM_EXIT_MINUTES: int = 120
+    MOMENTUM_MIN_PROFIT: float = 5.0
     MOMENTUM_MIN_ADX: float = 23.0
 
     # Портфельная стратегия
@@ -150,17 +150,17 @@ class StrategyConfig:
     PEAK_DRAWDOWN_CLOSE_PCT: float = 2.5
 
     # Трейлинг
-    TRAILING_ACTIVATE_PCT: float = 35.0
-    TRAILING_DRAWDOWN_CLOSE_PCT: float = 15.0
+    TRAILING_ACTIVATE_PCT: float = 40.0
+    TRAILING_DRAWDOWN_CLOSE_PCT: float = 20.0
     TRAILING_DISTANCE_PCT: float = 6.0
     TRAILING_BREAKEVEN_PCT: float = 0.1
-    MAX_POSITION_LOSS_PCT: float = -22.0
+    MAX_POSITION_LOSS_PCT: float = -25.0
 
     # Частичные TP (в % ROE)
     PARTIAL_TP_ENABLED: bool = True
-    PARTIAL_TP1_PCT: float = 100.0  # Ждем минимум 100% ROE (10% движения цены)
-    PARTIAL_TP2_PCT: float = 200.0  # Удвоение
-    PARTIAL_TP3_PCT: float = 400.0  # Оставляем на туземун
+    PARTIAL_TP1_PCT: float = 5000.0  
+    PARTIAL_TP2_PCT: float = 6000.0  
+    PARTIAL_TP3_PCT: float = 7000.0  
 
     # Время позиции
     POSITION_TIMEOUT_HOURS: float = 8.0
@@ -1011,7 +1011,7 @@ class SMCAnalyzer:
             result['atr'] = atr_val
             
             atr_pct = (atr_val / current_price * 100) if atr_val and current_price > 0 else 0.0
-            if atr_pct < 0.3:
+            if atr_pct < 0.8:
                 logger.info(f"Пропуск {symbol}: слишком низкая волатильность (ATR = {atr_pct:.2f}%)")
                 return result
 
@@ -1756,8 +1756,8 @@ class SmartMoneyBot:
                     prob = self.ml_model.predict_proba(features_df)[0][1]
 
                     
-                    if prob < 0.50:
-                        msg = f"🧠 AI Фильтр: Сигнал #{symbol} отменен (Вероятность {prob*100:.1f}% < 50%)"
+                    if prob < 0.40:
+                        msg = f"🧠 AI Фильтр: Сигнал #{symbol} отменен (Вероятность {prob*100:.1f}% < 40%)"
                         logger.info(msg)
                         # Можно раскомментировать, чтобы бот писал об отмене в ТГ:
                         # await self.send_telegram_message(msg)
@@ -2552,10 +2552,10 @@ class SmartMoneyBot:
                         continue
 
                     # Trailing Stop
-                    #if pnl_pct >= config.TRAILING_ACTIVATE_PCT and not position.trailing_active:
-                        #position.trailing_active = True
-                        #position.trailing_peak = pnl_pct
-                        #logger.info(f"Трейлинг активирован для {position.symbol} на {pnl_pct:.1f}%")
+                    if pnl_pct >= config.TRAILING_ACTIVATE_PCT and not position.trailing_active:
+                        position.trailing_active = True
+                        position.trailing_peak = pnl_pct
+                        logger.info(f"Трейлинг активирован для {position.symbol} на {pnl_pct:.1f}%")
 
                     if position.trailing_active:
                         if pnl_pct > position.trailing_peak:
@@ -3652,12 +3652,12 @@ async def main():
 
     config.DEPOSIT = 100.0                 # Твой реальный депозит
     config.ENTRY_AMOUNT = 100.0
-    config.LEVERAGE = 10                   # ⚠️ КРИТИЧНО: 10x! 50x тебя ликвидирует за минуту.
-    config.STOP_LOSS_PCT = 1.5             # Фоллбек, если ATR не сработает
+    config.LEVERAGE = 25                   # ⚠️ Синхронизировано с бэктестом (x25 Асимметричный Охотник)
+    config.STOP_LOSS_PCT = 1.0             # Фоллбек, если ATR не сработает (синхронизировано с бэктестом)
     config.REINVEST_PROFITS = True         # Включаем сложный процент (компаундинг)
     config.DRAWDOWN_ALERT = 12.0
-    config.MAX_CONCURRENT_POSITIONS = 12    # ⚠️ Максимум 4 сделки. На $100 больше нельзя.
-    config.MAX_SESSION_LOSS_PCT = 40.0     # 🛑 Стоп торгов, если слил $15 за день (спасает от тильта)
+    config.MAX_CONCURRENT_POSITIONS = 10   # ⚠️ Синхронизировано с бэктестом (10 слотов)
+    config.MAX_SESSION_LOSS_PCT = 35.0     # 🛑 Синхронизировано с бэктестом
     config.FILL_THRESHOLD = 0.90
 
     use_testnet = True                     # Оставь True для теста. Поставь False, когда закинешь $100.
