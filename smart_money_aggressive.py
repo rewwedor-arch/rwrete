@@ -1641,8 +1641,8 @@ class SmartMoneyBot:
             # === ПРОЦЕНТ НА ПОЗИЦИЮ ===
             weight = min(max(score, config.MIN_INDICATORS_SCORE) / 5.0, 1.5)
             
-            # Строгое равное деление на слоты (рекомендация для надежного риск-менеджмента)
-            base_amount = virtual_equity / config.MAX_CONCURRENT_POSITIONS
+            # Используем ENTRY_AMOUNT из настроек как базу, чтобы ИИ мог масштабировать размер сделки
+            base_amount = config.ENTRY_AMOUNT if config.ENTRY_AMOUNT > 0 else (virtual_equity / config.MAX_CONCURRENT_POSITIONS)
             
             amount_usdt = base_amount * weight * risk_multiplier
             amount_usdt = min(amount_usdt, virtual_free)
@@ -2137,7 +2137,7 @@ class SmartMoneyBot:
             parts = reason.split('\n', 1)
             title = parts[0]
             details = parts[1] + "\n" if len(parts) > 1 else ""
-            header = f"{title} | #{symbol.replace('/USDT', '')}\n{details}"
+            header = f"⚠️ БИРЖА УЖЕ ЗАКРЫЛА (SL/TP) | #{symbol.replace('/USDT', '')}\n(Бот пытался закрыть по: {title})\n{details}"
         else:
             header = f"{emoji} БИРЖА ЗАКРЫЛА ПОЗИЦИЮ (SL/TP) | #{symbol.replace('/USDT', '')}\n"
 
@@ -2229,20 +2229,22 @@ class SmartMoneyBot:
 
             if exit_price <= 0:
                 try:
-                    closed = await self.exchange.fetch_closed_orders(symbol, limit=5)
-                    if closed:
-                        exit_price = float(closed[-1].get('average') or closed[-1].get('price') or 0.0)
+                    closed = await self.exchange.fetch_closed_orders(symbol, limit=10)
+                    valid_closed = [o for o in closed if float(o.get('filled', 0)) > 0]
+                    if valid_closed:
+                        valid_closed.sort(key=lambda x: x.get('timestamp', 0))
+                        exit_price = float(valid_closed[-1].get('average') or valid_closed[-1].get('price') or 0.0)
                 except Exception:
                     pass
             
-            # --- ДОБАВЬ ВОТ ЭТИ ТРИ СТРОЧКИ СЮДА ---
             if exit_price <= 0:
-                logger.error(f"exit_price=0 для {symbol}. Ставим цену входа, чтобы избежать бага.")
-                exit_price = position.entry_price
-            # --------------------------------------
-            
-            exit_price = float(exit_price)
-
+                try:
+                    ticker = await self.exchange.fetch_ticker(symbol)
+                    exit_price = float(ticker.get('last') or position.entry_price)
+                    logger.warning(f"exit_price=0 для {symbol}. Использован ticker['last']: {exit_price}")
+                except Exception:
+                    logger.error(f"exit_price=0 для {symbol}. Ставим цену входа, чтобы избежать бага.")
+                    exit_price = position.entry_price
             
             exit_price = float(exit_price)
 
