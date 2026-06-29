@@ -69,11 +69,13 @@ logger = logging.getLogger(__name__)
 # FIX #13: Список TradFi символов которые требуют отдельного соглашения на Binance
 # Эти символы вызывают ошибку -4411 "Please sign TradFi-Perps agreement"
 TRADFI_SYMBOLS_BLACKLIST = {
-    'XAU', 'XAG',           # Металлы
+    'XAU', 'XAG',           
+    'SPX', 'INX', 'NDX', 'DJI', 'SPY', 'QQQ', 'IWM', 'DIA', # Индексы (Блокируем!)
     'AAPL', 'GOOGL', 'GOOG', 'MSFT', 'AMZN', 'META', 'NVDA', 'TSLA',
     'NFLX', 'BABA', 'AMD', 'INTC', 'PYPL', 'SQ', 'SHOP', 'COIN',
-    'GME', 'AMC', 'SPY', 'QQQ', 'DJI', 'NDX',  # Акции и индексы
+    'GME', 'AMC', 'CRM', 'ORCL', 'ADBE', 'NFLX', 'DIS', 'BA', # Акции
 }
+
 
 
 # ============================================================================
@@ -89,7 +91,7 @@ class StrategyConfig:
     LEVERAGE: int = 25
 
     # Риск-менеджмент
-    STOP_LOSS_PCT: float = 1.0
+    STOP_LOSS_PCT: float = 2.5
     TAKE_PROFIT_PCT: float = 2.5
     TAKE_PROFIT: float = 4.0
     TP2_PCT: float = 4.0
@@ -158,9 +160,9 @@ class StrategyConfig:
 
     # Частичные TP (в % ROE)
     PARTIAL_TP_ENABLED: bool = True
-    PARTIAL_TP1_PCT: float = 5000.0  
-    PARTIAL_TP2_PCT: float = 6000.0  
-    PARTIAL_TP3_PCT: float = 7000.0  
+    PARTIAL_TP1_PCT: float = 100.0  
+    PARTIAL_TP2_PCT: float = 300.0  
+    PARTIAL_TP3_PCT: float = 5000.0  
 
     # Время позиции
     POSITION_TIMEOUT_HOURS: float = 8.0
@@ -1310,6 +1312,7 @@ class Position:
     leverage: int
     quantity: float
     timestamp: datetime
+    initial_margin: float = 0.0  # <--- Добавляем для фиксации начальной маржи
     remaining_quantity: float = 0.0
     peak_pnl: float = 0.0
     trailing_active: bool = False
@@ -1998,7 +2001,8 @@ class SmartMoneyBot:
                 take_profit=tp1_price,
                 tp2_price=tp2_price,  # ✅ Передаем TP2
                 tp3_price=tp3_price,  # ✅ Передаем TP3
-                amount_usdt=actual_margin,
+                                amount_usdt=actual_margin,
+                initial_margin=actual_margin, # <--- Сохраняем начальную маржу
                 leverage=actual_leverage,
                 quantity=actual_qty,
                 remaining_quantity=actual_qty,
@@ -2266,7 +2270,9 @@ class SmartMoneyBot:
 
             total_pnl = position.realized_pnl_usd + leg_pnl
             margin = position.amount_usdt
-            pnl_pct = (total_pnl / margin) * 100 if margin > 0 else 0.0
+            ref_margin = position.initial_margin if position.initial_margin > 0 else margin
+            pnl_pct = (total_pnl / ref_margin) * 100 if ref_margin > 0 else 0.0
+
 
             self.db.update_position(position_id, exit_price, total_pnl, pnl_pct)
             self.db.update_daily_statistics(
