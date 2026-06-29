@@ -65,17 +65,17 @@ async def main():
         if vol >= config.MIN_VOLUME_USDT:
             valid_pairs.append(s)
             
-    # Теперь тестируем ВСЕ монеты, которые прошли фильтр объема (как в реальном боте).
+    # Тестируем ВСЕ монеты, как в реальном боте!
     target_pairs = valid_pairs
     
     top_pairs = target_pairs
-    logger.info(f"✅ Бэктест на {len(top_pairs)} волатильных альтах (ВЕСЬ рынок, кроме мусора)")
+    logger.info(f"✅ Бэктест на {len(top_pairs)} волатильных альтах (ВЕСЬ РЫНОК)")
     
     fg_data = await get_fear_and_greed()
     analyzer = BacktestAnalyzer(exchange)
     
     days = 30 # Длительность бэктеста в днях
-    offset_days = 30 # Сдвиг в прошлое (0 = последний месяц, 30 = предыдущий месяц, 60 = два месяца назад)
+    offset_days = 0 # Сдвиг в прошлое (0 = последний месяц), 30 = предыдущий месяц, 60 = два месяца назад)
     
     since_ms = int((datetime.now(timezone.utc) - timedelta(days=days + offset_days)).timestamp() * 1000)
     limit_15m = days * 24 * 4
@@ -232,16 +232,26 @@ async def main():
             logger.info(f"[ПРОПУСК] {signal['symbol']} - Нет свободной маржи (Свободно: ${virtual_free:.2f})")
             continue
             
-        # 4. Динамический расчет маржи (как в calculate_position_size)
+        # 4. Динамический расчет маржи с новым ИИ-масштабированием (до 80%)
         weight = min(max(signal['score'], config.MIN_INDICATORS_SCORE) / 5.0, 1.5)
-        ml_weight = signal['prob'] / 0.70
+        prob = signal['prob']
         
-        # ========= РЕИНВЕСТ-ПОЗИЦИОНИРОВАНИЕ =========
-        # Фиксированная доля от ТЕКУЩЕГО баланса (не от начального).
-        # Это и есть настоящий компаундинг: чем больше баланс — тем больше каждая сделка.
-        # Строгое равное деление на слоты
-        base_amount = max((current_balance / config.MAX_CONCURRENT_POSITIONS) * weight * ml_weight, config.MIN_SLOT_USDT)
-        margin = min(base_amount, virtual_free * 0.90)  # Разрешаем загружать до 90% свободной маржи
+        base_amount = current_balance / config.MAX_CONCURRENT_POSITIONS
+        
+        max_risk = 0.80
+        min_risk = config.MIN_SLOT_USDT / base_amount if base_amount > 0 else 0.1
+        min_risk = min(min_risk, max_risk)
+        
+        risk_mult = min_risk + ((prob - 0.40) / 0.60) * (max_risk - min_risk)
+        risk_mult = max(min_risk, min(risk_mult, max_risk))
+        
+        target_margin = base_amount * weight * risk_mult
+        
+        # Если расчетная маржа меньше минимума, подтягиваем до минимума
+        if target_margin < config.MIN_SLOT_USDT:
+            target_margin = config.MIN_SLOT_USDT
+            
+        margin = min(target_margin, virtual_free * 0.90)  # Разрешаем загружать до 90% свободной маржи
         
         if margin < config.MIN_SLOT_USDT:
             continue

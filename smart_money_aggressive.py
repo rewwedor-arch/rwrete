@@ -85,7 +85,7 @@ class StrategyConfig:
     """Конфигурация стратегии SMART MONEY — FAST COMPOUND MODE"""
     # Финансовые параметры
     DEPOSIT: float = 100.0
-    ENTRY_AMOUNT: float = 100.0
+    ENTRY_AMOUNT: float = 0.0  # 0.0 означает динамический компаундинг (Депозит / Макс. позиций)
     LEVERAGE: int = 25
 
     # Риск-менеджмент
@@ -100,7 +100,7 @@ class StrategyConfig:
     DAILY_TARGET_MAX: float = 15.0
     MAX_DAILY_LOSS_PCT: float = 30.0
 
-    MAX_CONCURRENT_POSITIONS: int = 10
+    MAX_CONCURRENT_POSITIONS: int = 20
     MAX_SESSION_LOSS_PCT: float = 35.0
     FILL_THRESHOLD: float = 0.90
     MAX_SPREAD_PCT: float = 0.05
@@ -137,8 +137,8 @@ class StrategyConfig:
     DRAWDOWN_ALERT: float = 12.0
 
     # Momentum exit
-    MOMENTUM_EXIT_MINUTES: int = 120
-    MOMENTUM_MIN_PROFIT: float = 5.0
+    MOMENTUM_EXIT_MINUTES: int = 240
+    MOMENTUM_MIN_PROFIT: float = 1.0
     MOMENTUM_MIN_ADX: float = 23.0
 
     # Портфельная стратегия
@@ -150,8 +150,8 @@ class StrategyConfig:
     PEAK_DRAWDOWN_CLOSE_PCT: float = 2.5
 
     # Трейлинг
-    TRAILING_ACTIVATE_PCT: float = 40.0
-    TRAILING_DRAWDOWN_CLOSE_PCT: float = 20.0
+    TRAILING_ACTIVATE_PCT: float = 30.0
+    TRAILING_DRAWDOWN_CLOSE_PCT: float = 10.0
     TRAILING_DISTANCE_PCT: float = 6.0
     TRAILING_BREAKEVEN_PCT: float = 0.1
     MAX_POSITION_LOSS_PCT: float = -25.0
@@ -1766,8 +1766,15 @@ class SmartMoneyBot:
                     # СДВИНУТО ВПРАВО:
                     ai_prob_str = f"🧠 AI Уверенность: {prob*100:.1f}%\n"
                     
-                    # СДВИНУТО ВПРАВО:
-                    risk_mult = prob / 0.70
+                    # Масштабируем размер: 40% вероятности = минимум ($5), 100% = максимум (80% от ENTRY_AMOUNT)
+                    max_risk = 0.80
+                    min_risk = config.MIN_SLOT_USDT / config.ENTRY_AMOUNT if config.ENTRY_AMOUNT > 0 else 0.1
+                    min_risk = min(min_risk, max_risk) # Защита, если MIN_SLOT вдруг больше 80% депозита
+
+                    risk_mult = min_risk + ((prob - 0.40) / 0.60) * (max_risk - min_risk)
+                    
+                    # Ограничиваем на всякий случай
+                    risk_mult = max(min_risk, min(risk_mult, max_risk))
                         
                 except Exception as e:
                     logger.warning(f"Ошибка предсказания ML: {e}")
@@ -2553,22 +2560,32 @@ class SmartMoneyBot:
                         await self.close_position(position_id, reason=sl_reason)
                         continue
 
+                    # DYNAMIC REGIME DETECTION (Адаптация под рынок)
+                    # Если на рынке "Жадность" (Альтсезон, мощные тренды) - даем широкую сетку для ловли 500%
+                    # Если на рынке "Страх" или боковик - берем быстрые 10% и убегаем
+                    if FEAR_GREED_VALUE >= 60:
+                        dyn_activate = 40.0
+                        dyn_drawdown = 20.0
+                    else:
+                        dyn_activate = 30.0
+                        dyn_drawdown = 10.0
+
                     # Trailing Stop
-                    if pnl_pct >= config.TRAILING_ACTIVATE_PCT and not position.trailing_active:
+                    if pnl_pct >= dyn_activate and not position.trailing_active:
                         position.trailing_active = True
                         position.trailing_peak = pnl_pct
-                        logger.info(f"Трейлинг активирован для {position.symbol} на {pnl_pct:.1f}%")
+                        logger.info(f"Трейлинг активирован для {position.symbol} на {pnl_pct:.1f}% (F&G: {FEAR_GREED_VALUE})")
 
                     if position.trailing_active:
                         if pnl_pct > position.trailing_peak:
                             position.trailing_peak = pnl_pct
 
                         trailing_drawdown = position.trailing_peak - pnl_pct
-                        if trailing_drawdown >= config.TRAILING_DRAWDOWN_CLOSE_PCT:
+                        if trailing_drawdown >= dyn_drawdown:
                             trail_reason = (
-                                f"🛡 TRAILING STOP\n"
+                                f"🛡 DYNAMIC TRAILING STOP (F&G: {FEAR_GREED_VALUE})\n"
                                 f"Пик: +{position.trailing_peak:.1f}%\n"
-                                f"Откат: {trailing_drawdown:.1f}%\n"
+                                f"Откат: {trailing_drawdown:.1f}% (Лимит {dyn_drawdown}%)\n"
                                 f"Фактический ROE: {pnl_pct:+.1f}%\n"
                                 f"PnL: {'+' if pnl_usd >= 0 else ''}${pnl_usd:.2f}"
                             )
