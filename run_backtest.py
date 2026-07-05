@@ -65,11 +65,11 @@ async def main():
         if vol >= config.MIN_VOLUME_USDT:
             valid_pairs.append(s)
             
-    # Тестируем ВСЕ монеты, как в реальном боте!
-    target_pairs = valid_pairs
+    # Берем топ-40 самых волатильных монет для тестирования
+    target_pairs = valid_pairs[:40]
     
     top_pairs = target_pairs
-    logger.info(f"✅ Бэктест на {len(top_pairs)} волатильных альтах (ВЕСЬ РЫНОК)")
+    logger.info(f"✅ Бэктест на {len(top_pairs)} волатильных альтах (Топ 40)")
     
     fg_data = await get_fear_and_greed()
     analyzer = BacktestAnalyzer(exchange)
@@ -300,9 +300,6 @@ async def main():
     if total_trades > 0:
         logger.info(f"✅ Успешных сделок: {winning_trades} ({winning_trades/total_trades*100:.1f}%)")
     logger.info(f"🤖 Сделок отсеяно ИИ фильтром: {ml_rejected}")
-    
-    input("\nНажмите Enter для выхода...")
-
 if __name__ == '__main__':
     try:
         asyncio.run(main())
@@ -310,4 +307,8 @@ if __name__ == '__main__':
         pass
     except Exception as e:
         logger.error(f"Скрипт завершился с ошибкой: {e}")
-        input("\nНажмите Enter для выхода...")
+    finally:
+        try:
+            input("\nНажмите Enter для выхода...")
+        except EOFError:
+            pass

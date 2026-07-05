@@ -102,7 +102,7 @@ class StrategyConfig:
     DAILY_TARGET_MAX: float = 15.0
     MAX_DAILY_LOSS_PCT: float = 30.0
 
-    MAX_CONCURRENT_POSITIONS: int = 20
+    MAX_CONCURRENT_POSITIONS: int = 3
     MAX_SESSION_LOSS_PCT: float = 35.0
     FILL_THRESHOLD: float = 0.90
     MAX_SPREAD_PCT: float = 0.05
@@ -115,14 +115,14 @@ class StrategyConfig:
  # Минимальный суточный объем (15 млн $)
     
     # Фильтр по времени (защита от ночного флэта и ложных пробоев)
-    RESTRICT_HOURS: bool = True
-    # Время по Гринвичу (UTC). 5:00 UTC = 8:00 МСК, 18:00 UTC = 21:00 МСК
-    TRADE_START_HOUR_UTC: int = 5
-    TRADE_END_HOUR_UTC: int = 18
+    RESTRICT_HOURS: bool = False
+    
+    TRADE_START_HOUR_UTC: int = 0
+    TRADE_END_HOUR_UTC: int = 24
 
 
     # Параметры сигналов
-    MIN_INDICATORS_SCORE: int = 4  # Для скальпинга 4 из 8 достаточно для входа
+    MIN_INDICATORS_SCORE: int = 3  # Для скальпинга 4 из 8 достаточно для входа
     TOTAL_INDICATORS: int = 8
 
     # Таймфреймы
@@ -162,10 +162,10 @@ class StrategyConfig:
     PARTIAL_TP_ENABLED: bool = True
     PARTIAL_TP1_PCT: float = 100.0  
     PARTIAL_TP2_PCT: float = 300.0  
-    PARTIAL_TP3_PCT: float = 5000.0  
+    PARTIAL_TP3_PCT: float = 1000.0  
 
     # Время позиции
-    POSITION_TIMEOUT_HOURS: float = 8.0
+    POSITION_TIMEOUT_HOURS: float = 2.0
     BAD_POSITION_TIMEOUT_MINUTES: int = 12
     BAD_TRADE_EXIT_MINUTES: int = 6
     SMART_EXIT_ANALYSIS: bool = True
@@ -1014,7 +1014,7 @@ class SMCAnalyzer:
             
             atr_pct = (atr_val / current_price * 100) if atr_val and current_price > 0 else 0.0
             if atr_pct < 0.8:
-                logger.info(f"Пропуск {symbol}: слишком низкая волатильность (ATR = {atr_pct:.2f}%)")
+                logger.debug(f"Пропуск {symbol}: слишком низкая волатильность (ATR = {atr_pct:.2f}%)")
                 return result
 
             long_score = 0
@@ -1089,7 +1089,7 @@ class SMCAnalyzer:
             if adx:
                 result['adx'] = adx[-1]
                 if adx[-1] < 18:
-                    logger.info(f"Пропуск {symbol}: Глубокий флэт (ADX = {adx[-1]:.1f} < 18)")
+                    logger.debug(f"Пропуск {symbol}: Глубокий флэт (ADX = {adx[-1]:.1f} < 18)")
                     return result
 
                 # ADX >= 22 = начало тренда, даём балл
@@ -1926,8 +1926,7 @@ class SmartMoneyBot:
                 # 🛡 Жёсткие границы (Floor & Ceiling):
                 # Минимум 1.5% (чтобы на BTC/ETH не ставить стоп 0.1%)
                 # Максимум 4.5% (чтобы на шиткоинах стоп не улетал на 15% и не ждал ликвидации)
-                sl_dist_pct = max(1.5, min(sl_dist_pct, 4.5))
-                
+                sl_dist_pct = max(2.5, min(sl_dist_pct, 4.5))  # Floor & Ceiling            
                 sl_dist = actual_entry * (sl_dist_pct / 100)
                 logger.info(f"{symbol}: 🧠 Dynamic SL = {sl_dist_pct:.2f}% (ATR={atr_val:.6f})")
             else:
@@ -2208,17 +2207,28 @@ class SmartMoneyBot:
 
             try:
                 order_params = {'reduceOnly': True, 'positionSide': 'BOTH'}
-
-                if position.side == 'SHORT':
-                    order = await self.exchange.create_market_buy_order(symbol, qty_close, params=order_params)
-                else:
-                    order = await self.exchange.create_market_sell_order(symbol, qty_close, params=order_params)
+                
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        if position.side == 'SHORT':
+                            order = await self.exchange.create_market_buy_order(symbol, qty_close, params=order_params)
+                        else:
+                            order = await self.exchange.create_market_sell_order(symbol, qty_close, params=order_params)
+                        break
+                    except Exception as close_error:
+                        error_text = str(close_error)
+                        if '-1007' in error_text or 'Timeout' in error_text:
+                            logger.warning(f"Таймаут при закрытии {symbol}, попытка {attempt+1}/{max_retries}")
+                            if attempt < max_retries - 1:
+                                await asyncio.sleep(2)
+                                continue
+                        raise close_error
 
             except Exception as close_error:
                 error_text = str(close_error)
                 if '-2022' in error_text or 'ReduceOnly Order is rejected' in error_text:
                     logger.warning(f"Позиция {symbol} уже закрыта (ошибка: {error_text})")
-                    # ДОБАВЛЕН reason
                     return await self._handle_already_closed_position(position_id, position, margin, reason)
                 raise
 
@@ -2328,7 +2338,9 @@ class SmartMoneyBot:
 
         except Exception as e:
             logger.error(f"Ошибка закрытия позиции {position_id}: {e}")
-            await self.send_telegram_message(f"❌ Ошибка закрытия: {e}")
+            error_text = str(e)
+            if '-1007' not in error_text and 'Timeout' not in error_text:
+                await self.send_telegram_message(f"❌ Ошибка закрытия: {e}")
             return False
 
 
@@ -2344,14 +2356,26 @@ class SmartMoneyBot:
             if qty_to_close <= 0:
                 return False
 
-            if position.side == 'SHORT':
-                order = await self.exchange.create_market_buy_order(
-                    position.symbol, qty_to_close, params={'reduceOnly': True}
-                )
-            else:
-                order = await self.exchange.create_market_sell_order(
-                    position.symbol, qty_to_close, params={'reduceOnly': True}
-                )
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    if position.side == 'SHORT':
+                        order = await self.exchange.create_market_buy_order(
+                            position.symbol, qty_to_close, params={'reduceOnly': True}
+                        )
+                    else:
+                        order = await self.exchange.create_market_sell_order(
+                            position.symbol, qty_to_close, params={'reduceOnly': True}
+                        )
+                    break
+                except Exception as e:
+                    error_text = str(e)
+                    if '-1007' in error_text or 'Timeout' in error_text:
+                        logger.warning(f"Таймаут при частичном закрытии {position.symbol}, попытка {attempt+1}/{max_retries}")
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(2)
+                            continue
+                    raise
 
             executed_price = float(order.get('average') or order.get('price') or current_price)
 
@@ -3681,8 +3705,8 @@ async def main():
     config.STOP_LOSS_PCT = 1.0             # Фоллбек, если ATR не сработает (синхронизировано с бэктестом)
     config.REINVEST_PROFITS = True         # Включаем сложный процент (компаундинг)
     config.DRAWDOWN_ALERT = 12.0
-    config.MAX_CONCURRENT_POSITIONS = 10   # ⚠️ Синхронизировано с бэктестом (10 слотов)
-    config.MAX_SESSION_LOSS_PCT = 35.0     # 🛑 Синхронизировано с бэктестом
+    config.MAX_CONCURRENT_POSITIONS = 3   # ⚠️ Золотая середина: защита от корреляции и разгона просадок
+    config.MAX_SESSION_LOSS_PCT = 35.0     # 🛑 Экстренный стоп на день
     config.FILL_THRESHOLD = 0.90
 
     use_testnet = True                     # Оставь True для теста. Поставь False, когда закинешь $100.

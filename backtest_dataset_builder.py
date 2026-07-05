@@ -80,7 +80,7 @@ def simulate_trade(direction, entry_price, atr, future_candles):
     if atr > 0 and entry_price > 0:
         sl_dist_atr = atr * 1.5
         sl_dist_pct = (sl_dist_atr / entry_price) * 100
-        sl_dist_pct = max(1.5, min(sl_dist_pct, 4.5))  # Floor & Ceiling
+        sl_dist_pct = max(2.5, min(sl_dist_pct, 4.5))  # Floor & Ceiling
         sl_dist = entry_price * (sl_dist_pct / 100.0)
     else:
         sl_dist = entry_price * (config.STOP_LOSS_PCT / 100.0)
@@ -124,8 +124,18 @@ def simulate_trade(direction, entry_price, atr, future_candles):
         duration_minutes = (idx + 1) * 15
         
         if direction == 'LONG':
-            # 1. Проверка стоп-лосса (Срабатывает первым, если он ближе к точке входа)
-            if low <= sl:
+            hit_sl = low <= sl
+            hit_tp = qty > 0 and high >= tp1
+            open_p = f_candle[1]
+            
+            if hit_sl and hit_tp:
+                # Внутри одной свечи зацепили и стоп, и тейк.
+                if abs(tp1 - open_p) <= abs(sl - open_p):
+                    hit_sl = False  # Тейк был ближе, значит сработал первым
+                else:
+                    hit_tp = False  # Стоп был ближе
+
+            if hit_sl:
                 realized_pnl += (sl - entry_price) / entry_price * qty
                 qty = 0
                 break
@@ -135,7 +145,8 @@ def simulate_trade(direction, entry_price, atr, future_candles):
                 realized_pnl -= (1.0 / config.LEVERAGE) * qty # Фиксируем убыток -100%
                 qty = 0
                 break
-            if qty > 0 and high >= tp1:
+                
+            if hit_tp:
                 if config.PARTIAL_TP_ENABLED:
                     realized_pnl += (tp1 - entry_price) / entry_price * 0.4
                     qty -= 0.4
@@ -190,8 +201,17 @@ def simulate_trade(direction, entry_price, atr, future_candles):
                 break
                 
         else: # SHORT
-            # 1. Проверка стоп-лосса (Срабатывает первым, если он ближе к точке входа)
-            if high >= sl:
+            hit_sl = high >= sl
+            hit_tp = qty > 0 and low <= tp1
+            open_p = f_candle[1]
+            
+            if hit_sl and hit_tp:
+                if abs(tp1 - open_p) <= abs(sl - open_p):
+                    hit_sl = False
+                else:
+                    hit_tp = False
+
+            if hit_sl:
                 realized_pnl += (entry_price - sl) / entry_price * qty
                 qty = 0
                 break
@@ -201,7 +221,8 @@ def simulate_trade(direction, entry_price, atr, future_candles):
                 realized_pnl -= (1.0 / config.LEVERAGE) * qty # Фиксируем убыток -100%
                 qty = 0
                 break
-            if qty > 0 and low <= tp1:
+                
+            if hit_tp:
                 if config.PARTIAL_TP_ENABLED:
                     realized_pnl += (entry_price - tp1) / entry_price * 0.4
                     qty -= 0.4
