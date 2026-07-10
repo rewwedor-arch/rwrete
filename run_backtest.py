@@ -65,11 +65,9 @@ async def main():
         if vol >= config.MIN_VOLUME_USDT:
             valid_pairs.append(s)
             
-    # Берем топ-40 самых волатильных монет для тестирования
-    target_pairs = valid_pairs[:40]
-    
-    top_pairs = target_pairs
-    logger.info(f"✅ Бэктест на {len(top_pairs)} волатильных альтах (Топ 40)")
+    # Берем ВСЕ пары, прошедшие фильтр объема (для полного теста)
+    top_pairs = valid_pairs
+    logger.info(f"✅ Бэктест на {len(top_pairs)} волатильных альтах (ВЕСЬ РЫНОК)")
     
     fg_data = await get_fear_and_greed()
     analyzer = BacktestAnalyzer(exchange)
@@ -165,7 +163,7 @@ async def main():
                     if len(all_signals) + ml_rejected < 20:
                         logger.info(f"DEBUG prob={prob:.3f} | {symbol} {direction} | score={result.get('score', 0)}")
                     
-                    if prob < 0.40:
+                    if prob < 0.60:
                         ml_rejected += 1
                         continue
                         
@@ -238,11 +236,14 @@ async def main():
         
         base_amount = current_balance / config.MAX_CONCURRENT_POSITIONS
         
-        max_risk = 0.80
+        # V2: Динамический минимум
+        max_risk = 0.95
         min_risk = config.MIN_SLOT_USDT / base_amount if base_amount > 0 else 0.1
         min_risk = min(min_risk, max_risk)
         
-        risk_mult = min_risk + ((prob - 0.40) / 0.60) * (max_risk - min_risk)
+        # Квадратичное масштабирование: 60%=мин, 80%=25%, 90%=56%
+        normalized = (prob - 0.60) / 0.40
+        risk_mult = min_risk + (normalized ** 2) * (max_risk - min_risk)
         risk_mult = max(min_risk, min(risk_mult, max_risk))
         
         target_margin = base_amount * weight * risk_mult

@@ -4,6 +4,8 @@ import ccxt.async_support as ccxt
 import aiohttp
 from datetime import datetime, timedelta, timezone
 import logging
+import os
+import json
 
 from smart_money_aggressive import SMCAnalyzer, config, Database
 import smart_money_aggressive
@@ -29,9 +31,26 @@ class BacktestAnalyzer(SMCAnalyzer):
         return self.mock_imbalance
 
 async def fetch_historical_klines(exchange, symbol, timeframe, since, limit_total):
+    clean_symbol = symbol.split(':')[0].replace('/', '')
+    
+    # Система кэширования
+    cache_dir = "cache"
+    if not os.path.exists(cache_dir):
+        os.makedirs(cache_dir)
+        
+    cache_file = os.path.join(cache_dir, f"klines_{clean_symbol}_{timeframe}_{since}_{limit_total}.json")
+    
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r') as f:
+                cached_data = json.load(f)
+                if len(cached_data) >= limit_total * 0.9: # Если скачано почти все
+                    return cached_data
+        except Exception as e:
+            logger.warning(f"Cache read error for {cache_file}: {e}")
+
     all_klines = []
     current_since = since
-    clean_symbol = symbol.split(':')[0].replace('/', '')
     url = "https://fapi.binance.com/fapi/v1/klines"
     
     async with aiohttp.ClientSession() as session:
@@ -62,6 +81,15 @@ async def fetch_historical_klines(exchange, symbol, timeframe, since, limit_tota
             except Exception as e:
                 logger.error(f"Error fetching klines for {symbol}: {e}")
                 break
+                
+    # Сохраняем в кэш
+    if all_klines:
+        try:
+            with open(cache_file, 'w') as f:
+                json.dump(all_klines, f)
+        except Exception as e:
+            logger.warning(f"Cache write error for {cache_file}: {e}")
+            
     return all_klines
 
 async def get_fear_and_greed():
@@ -77,27 +105,31 @@ async def get_fear_and_greed():
 
 def simulate_trade(direction, entry_price, atr, future_candles):
     # ДИНАМИЧЕСКИЙ СТОП НА ОСНОВЕ ATR (как в реальном боте)
+    # FIX #2: Ликвидация считается ПЕРВОЙ, SL не может быть дальше неё
+    liq_dist_pct = (100.0 / config.LEVERAGE) * 0.95 
+    liq_dist = entry_price * (liq_dist_pct / 100.0)
+    # Максимально допустимый SL = 80% дистанции до ликвидации (страховка)
+    max_sl_dist = liq_dist * 0.80
+
     if atr > 0 and entry_price > 0:
         sl_dist_atr = atr * 1.5
         sl_dist_pct = (sl_dist_atr / entry_price) * 100
-        sl_dist_pct = max(2.5, min(sl_dist_pct, 4.5))  # Floor & Ceiling
+        sl_dist_pct = max(1.5, min(sl_dist_pct, 3.0))  # Floor & Ceiling
         sl_dist = entry_price * (sl_dist_pct / 100.0)
     else:
         sl_dist = entry_price * (config.STOP_LOSS_PCT / 100.0)
+    
+    # FIX #2: Ограничиваем SL, чтобы он ВСЕГДА срабатывал до ликвидации
+    sl_dist = min(sl_dist, max_sl_dist)
     
     if config.PARTIAL_TP_ENABLED:
         tp1_dist = entry_price * (config.PARTIAL_TP1_PCT / config.LEVERAGE / 100.0)
         tp2_dist = entry_price * (config.PARTIAL_TP2_PCT / config.LEVERAGE / 100.0)
         tp3_dist = entry_price * (config.PARTIAL_TP3_PCT / config.LEVERAGE / 100.0)
     else:
-        # Если частичные тейки выключены, мы используем глобальный TAKE_PROFIT_PCT
         tp1_dist = entry_price * (config.TAKE_PROFIT_PCT / 100.0)
-        tp2_dist = tp1_dist * 2  # недостижимо
+        tp2_dist = tp1_dist * 2
         tp3_dist = tp1_dist * 3
-
-    # Дистанция до ликвидации (чуть меньше 100% маржи из-за комиссий поддержания)
-    liq_dist_pct = (100.0 / config.LEVERAGE) * 0.95 
-    liq_dist = entry_price * (liq_dist_pct / 100.0)
 
     if direction == 'LONG':
         sl = entry_price - sl_dist
@@ -116,6 +148,10 @@ def simulate_trade(direction, entry_price, atr, future_candles):
     realized_pnl = 0.0
     trailing_active = False
     trailing_peak = 0.0
+    # FIX #1: Отслеживаем текущий уровень TP (только один TP за свечу)
+    tp_stage = 0  # 0=ожидаем TP1, 1=ожидаем TP2, 2=ожидаем TP3, 3=все TP закрыты
+    # FIX #3: Считаем количество ордеров для корректных комиссий
+    num_fills = 1  # Вход = 1 fill
     
     for idx, f_candle in enumerate(future_candles):
         high = f_candle[2]
@@ -125,53 +161,77 @@ def simulate_trade(direction, entry_price, atr, future_candles):
         
         if direction == 'LONG':
             hit_sl = low <= sl
-            hit_tp = qty > 0 and high >= tp1
             open_p = f_candle[1]
             
+            # FIX #1: Определяем какой TP может сработать на этой свече
+            if tp_stage == 0:
+                hit_tp = qty > 0 and high >= tp1
+            elif tp_stage == 1:
+                hit_tp = qty > 0 and high >= tp2
+            elif tp_stage == 2:
+                hit_tp = qty > 0 and high >= tp3
+            else:
+                hit_tp = False
+            
+            # Проверка одновременного хита SL и TP
             if hit_sl and hit_tp:
-                # Внутри одной свечи зацепили и стоп, и тейк.
-                if abs(tp1 - open_p) <= abs(sl - open_p):
-                    hit_sl = False  # Тейк был ближе, значит сработал первым
+                current_tp = [tp1, tp2, tp3][tp_stage] if tp_stage < 3 else sl
+                if abs(current_tp - open_p) <= abs(sl - open_p):
+                    hit_sl = False
                 else:
-                    hit_tp = False  # Стоп был ближе
+                    hit_tp = False
 
             if hit_sl:
                 realized_pnl += (sl - entry_price) / entry_price * qty
+                num_fills += 1
                 qty = 0
                 break
                 
-            # 2. ПРОВЕРКА ЛИКВИДАЦИИ (если стоп не спас или его не было)
             if low <= liq_price:
-                realized_pnl -= (1.0 / config.LEVERAGE) * qty # Фиксируем убыток -100%
+                realized_pnl -= (1.0 / config.LEVERAGE) * qty
+                num_fills += 1
                 qty = 0
                 break
                 
-            if hit_tp:
-                if config.PARTIAL_TP_ENABLED:
-                    realized_pnl += (tp1 - entry_price) / entry_price * 0.4
-                    qty -= 0.4
-                    sl = entry_price # Breakeven
-                else:
-                    realized_pnl += (tp1 - entry_price) / entry_price * qty
-                    qty = 0
-                    break
-            if config.PARTIAL_TP_ENABLED and qty > 0.5 and high >= tp2:
-                realized_pnl += (tp2 - entry_price) / entry_price * 0.3
-                qty -= 0.3
-                sl = tp1 # Trail to TP1
-            if config.PARTIAL_TP_ENABLED and qty > 0.2 and high >= tp3:
-                realized_pnl += (tp3 - entry_price) / entry_price * qty
+            # FIX #1: Только ОДИН тейк-профит за свечу
+            if hit_tp and config.PARTIAL_TP_ENABLED:
+                if tp_stage == 0 and high >= tp1:
+                    realized_pnl += (tp1 - entry_price) / entry_price * 0.25
+                    qty -= 0.25
+                    sl = entry_price  # Breakeven
+                    tp_stage = 1
+                    num_fills += 1
+                    # НЕ проверяем TP2/TP3 на этой же свече!
+                elif tp_stage == 1 and high >= tp2:
+                    realized_pnl += (tp2 - entry_price) / entry_price * 0.25
+                    qty -= 0.25
+                    sl = tp1  # Trail to TP1
+                    tp_stage = 2
+                    num_fills += 1
+                elif tp_stage == 2 and high >= tp3:
+                    realized_pnl += (tp3 - entry_price) / entry_price * 0.40
+                    qty -= 0.40
+                    sl = tp2  # Trail to TP2
+                    tp_stage = 3  # RUNNER STAGE
+                    num_fills += 1
+            elif hit_tp and not config.PARTIAL_TP_ENABLED:
+                realized_pnl += (tp1 - entry_price) / entry_price * qty
+                num_fills += 1
                 qty = 0
                 break
 
-            # Trailing Stop Logic (Check drawdown BEFORE updating peak to avoid lookahead bias)
+            # Trailing Stop
             if trailing_active:
                 current_floating_pnl_pct = (low - entry_price) / entry_price * config.LEVERAGE * 100.0
                 trailing_drawdown = trailing_peak - current_floating_pnl_pct
                 
-                if trailing_drawdown >= config.TRAILING_DRAWDOWN_CLOSE_PCT:
-                    exit_price = entry_price * (1 + (trailing_peak - config.TRAILING_DRAWDOWN_CLOSE_PCT) / 100.0 / config.LEVERAGE)
+                # Используем обычный трейлинг, или широкий трейлинг для раннера
+                active_drawdown_limit = config.RUNNER_TRAILING_DRAWDOWN_PCT if tp_stage == 3 else config.TRAILING_DRAWDOWN_CLOSE_PCT
+                
+                if trailing_drawdown >= active_drawdown_limit:
+                    exit_price = entry_price * (1 + (trailing_peak - active_drawdown_limit) / 100.0 / config.LEVERAGE)
                     realized_pnl += (exit_price - entry_price) / entry_price * qty
+                    num_fills += 1
                     qty = 0
                     break
 
@@ -181,73 +241,95 @@ def simulate_trade(direction, entry_price, atr, future_candles):
                 if peak_floating_pnl_pct > trailing_peak:
                     trailing_peak = peak_floating_pnl_pct
 
-            # Считаем текущий плавающий PNL по цене закрытия свечи
             floating_pnl_pct = (close - entry_price) / entry_price * config.LEVERAGE * 100.0
             
-            # 2. Проверка тайм-аутов (срабатывает по закрытию свечи)
             if duration_minutes >= config.POSITION_TIMEOUT_HOURS * 60 and floating_pnl_pct < 10.0:
                 realized_pnl += (close - entry_price) / entry_price * qty
+                num_fills += 1
                 qty = 0
                 break
-                
             if duration_minutes >= config.MOMENTUM_EXIT_MINUTES and floating_pnl_pct < config.MOMENTUM_MIN_PROFIT:
                 realized_pnl += (close - entry_price) / entry_price * qty
+                num_fills += 1
                 qty = 0
                 break
-                
             if duration_minutes >= config.BAD_POSITION_TIMEOUT_MINUTES and floating_pnl_pct <= config.MAX_POSITION_LOSS_PCT:
                 realized_pnl += (close - entry_price) / entry_price * qty
+                num_fills += 1
                 qty = 0
                 break
                 
         else: # SHORT
             hit_sl = high >= sl
-            hit_tp = qty > 0 and low <= tp1
             open_p = f_candle[1]
             
+            # FIX #1: Определяем какой TP может сработать
+            if tp_stage == 0:
+                hit_tp = qty > 0 and low <= tp1
+            elif tp_stage == 1:
+                hit_tp = qty > 0 and low <= tp2
+            elif tp_stage == 2:
+                hit_tp = qty > 0 and low <= tp3
+            else:
+                hit_tp = False
+            
             if hit_sl and hit_tp:
-                if abs(tp1 - open_p) <= abs(sl - open_p):
+                current_tp = [tp1, tp2, tp3][tp_stage] if tp_stage < 3 else sl
+                if abs(current_tp - open_p) <= abs(sl - open_p):
                     hit_sl = False
                 else:
                     hit_tp = False
 
             if hit_sl:
                 realized_pnl += (entry_price - sl) / entry_price * qty
+                num_fills += 1
                 qty = 0
                 break
                 
-            # 2. ПРОВЕРКА ЛИКВИДАЦИИ 
             if high >= liq_price:
-                realized_pnl -= (1.0 / config.LEVERAGE) * qty # Фиксируем убыток -100%
+                realized_pnl -= (1.0 / config.LEVERAGE) * qty
+                num_fills += 1
                 qty = 0
                 break
                 
-            if hit_tp:
-                if config.PARTIAL_TP_ENABLED:
-                    realized_pnl += (entry_price - tp1) / entry_price * 0.4
-                    qty -= 0.4
-                    sl = entry_price # Breakeven
-                else:
-                    realized_pnl += (entry_price - tp1) / entry_price * qty
-                    qty = 0
-                    break
-            if config.PARTIAL_TP_ENABLED and qty > 0.5 and low <= tp2:
-                realized_pnl += (entry_price - tp2) / entry_price * 0.3
-                qty -= 0.3
-                sl = tp1 # Trail to TP1
-            if config.PARTIAL_TP_ENABLED and qty > 0.2 and low <= tp3:
-                realized_pnl += (entry_price - tp3) / entry_price * qty
+            # FIX #1: Только ОДИН тейк-профит за свечу
+            if hit_tp and config.PARTIAL_TP_ENABLED:
+                if tp_stage == 0 and low <= tp1:
+                    realized_pnl += (entry_price - tp1) / entry_price * 0.25
+                    qty -= 0.25
+                    sl = entry_price  # Breakeven
+                    tp_stage = 1
+                    num_fills += 1
+                elif tp_stage == 1 and low <= tp2:
+                    realized_pnl += (entry_price - tp2) / entry_price * 0.25
+                    qty -= 0.25
+                    sl = tp1  # Trail to TP1
+                    tp_stage = 2
+                    num_fills += 1
+                elif tp_stage == 2 and low <= tp3:
+                    realized_pnl += (entry_price - tp3) / entry_price * 0.40
+                    qty -= 0.40
+                    sl = tp2  # Trail to TP2
+                    tp_stage = 3  # RUNNER STAGE
+                    num_fills += 1
+            elif hit_tp and not config.PARTIAL_TP_ENABLED:
+                realized_pnl += (entry_price - tp1) / entry_price * qty
+                num_fills += 1
                 qty = 0
                 break
 
-            # Trailing Stop Logic (Check drawdown BEFORE updating peak to avoid lookahead bias)
+            # Trailing Stop SHORT
             if trailing_active:
                 current_floating_pnl_pct = (entry_price - high) / entry_price * config.LEVERAGE * 100.0
                 trailing_drawdown = trailing_peak - current_floating_pnl_pct
                 
-                if trailing_drawdown >= config.TRAILING_DRAWDOWN_CLOSE_PCT:
-                    exit_price = entry_price * (1 - (trailing_peak - config.TRAILING_DRAWDOWN_CLOSE_PCT) / 100.0 / config.LEVERAGE)
+                # Используем обычный трейлинг, или широкий трейлинг для раннера
+                active_drawdown_limit = config.RUNNER_TRAILING_DRAWDOWN_PCT if tp_stage == 3 else config.TRAILING_DRAWDOWN_CLOSE_PCT
+                
+                if trailing_drawdown >= active_drawdown_limit:
+                    exit_price = entry_price * (1 - (trailing_peak - active_drawdown_limit) / 100.0 / config.LEVERAGE)
                     realized_pnl += (entry_price - exit_price) / entry_price * qty
+                    num_fills += 1
                     qty = 0
                     break
 
@@ -257,38 +339,47 @@ def simulate_trade(direction, entry_price, atr, future_candles):
                 if peak_floating_pnl_pct > trailing_peak:
                     trailing_peak = peak_floating_pnl_pct
 
-            # Считаем текущий плавающий PNL по цене закрытия свечи
             floating_pnl_pct = (entry_price - close) / entry_price * config.LEVERAGE * 100.0
             
-            # 2. Проверка тайм-аутов (срабатывает по закрытию свечи)
             if duration_minutes >= config.POSITION_TIMEOUT_HOURS * 60 and floating_pnl_pct < 10.0:
                 realized_pnl += (entry_price - close) / entry_price * qty
+                num_fills += 1
                 qty = 0
                 break
-                
             if duration_minutes >= config.MOMENTUM_EXIT_MINUTES and floating_pnl_pct < config.MOMENTUM_MIN_PROFIT:
                 realized_pnl += (entry_price - close) / entry_price * qty
+                num_fills += 1
                 qty = 0
                 break
-                
             if duration_minutes >= config.BAD_POSITION_TIMEOUT_MINUTES and floating_pnl_pct <= config.MAX_POSITION_LOSS_PCT:
                 realized_pnl += (entry_price - close) / entry_price * qty
+                num_fills += 1
                 qty = 0
                 break
 
-    # Если цикл закончился (прошло 100 свечей), а позиция все еще открыта - закрываем по рынку
+    # Закрытие по таймауту
     if qty > 0:
         last_close = future_candles[-1][4]
         if direction == 'LONG':
             realized_pnl += (last_close - entry_price) / entry_price * qty
         else:
             realized_pnl += (entry_price - last_close) / entry_price * qty
+        num_fills += 1
 
-    # Включаем не только комиссии (0.08%), но и реальное проскальзывание (slippage) 
-    # на рыночном ордере при входе и выходе (добавляем 0.15% штрафа к каждой сделке).
-    slippage_penalty = 0.0005
-    fees_and_slippage = (config.TAKER_FEE * 2) + slippage_penalty
-    realized_pnl -= fees_and_slippage
+    # FIX #3: Комиссия за КАЖДЫЙ fill (вход + все частичные выходы)
+    fee_per_fill = config.TAKER_FEE  # 0.04% за каждый fill
+    total_fees = fee_per_fill * num_fills
+    
+    # Slippage — реалистичный (0.05% на вход + 0.03% на каждый выход)
+    slippage = 0.0005 + 0.0003 * (num_fills - 1)
+    
+    # FIX #4: Funding rate — ~0.01% каждые 8 часов на notional
+    funding_rate_per_8h = 0.0001  # 0.01% (средний funding rate на Binance)
+    hours_held = duration_minutes / 60.0
+    funding_periods = hours_held / 8.0
+    funding_cost = funding_rate_per_8h * funding_periods
+    
+    realized_pnl -= (total_fees + slippage + funding_cost)
     
     # Возвращаем ROE (%) и длительность сделки в минутах
     return realized_pnl * config.LEVERAGE * 100.0, duration_minutes

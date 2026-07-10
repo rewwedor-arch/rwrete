@@ -74,6 +74,7 @@ TRADFI_SYMBOLS_BLACKLIST = {
     'AAPL', 'GOOGL', 'GOOG', 'MSFT', 'AMZN', 'META', 'NVDA', 'TSLA',
     'NFLX', 'BABA', 'AMD', 'INTC', 'PYPL', 'SQ', 'SHOP', 'COIN',
     'GME', 'AMC', 'CRM', 'ORCL', 'ADBE', 'NFLX', 'DIS', 'BA', # Акции
+    'DOGE', 'SHIB', 'PEPE', 'WIF', 'FLOKI', 'BONK', 'BOME', 'MEME', 'PEOPLE', 'TURBO', '1000PEPE', '1000SHIB', '1000FLOKI', '1000BONK' # Мемкоины (казино)
 }
 
 
@@ -88,10 +89,10 @@ class StrategyConfig:
     # Финансовые параметры
     DEPOSIT: float = 100.0
     ENTRY_AMOUNT: float = 0.0  # 0.0 означает динамический компаундинг (Депозит / Макс. позиций)
-    LEVERAGE: int = 25
+    LEVERAGE: int = 20
 
     # Риск-менеджмент
-    STOP_LOSS_PCT: float = 2.5
+    STOP_LOSS_PCT: float = 1.5
     TAKE_PROFIT_PCT: float = 2.5
     TAKE_PROFIT: float = 4.0
     TP2_PCT: float = 4.0
@@ -122,7 +123,7 @@ class StrategyConfig:
 
 
     # Параметры сигналов
-    MIN_INDICATORS_SCORE: int = 3  # Для скальпинга 4 из 8 достаточно для входа
+    MIN_INDICATORS_SCORE: int = 4  # Минимум 4 из 8 индикаторов для входа
     TOTAL_INDICATORS: int = 8
 
     # Таймфреймы
@@ -152,22 +153,23 @@ class StrategyConfig:
     PEAK_DRAWDOWN_CLOSE_PCT: float = 2.5
 
     # Трейлинг
-    TRAILING_ACTIVATE_PCT: float = 30.0
-    TRAILING_DRAWDOWN_CLOSE_PCT: float = 10.0
+    TRAILING_ACTIVATE_PCT: float = 25.0
+    TRAILING_DRAWDOWN_CLOSE_PCT: float = 8.0
     TRAILING_DISTANCE_PCT: float = 6.0
     TRAILING_BREAKEVEN_PCT: float = 0.1
-    MAX_POSITION_LOSS_PCT: float = -25.0
+    MAX_POSITION_LOSS_PCT: float = -20.0
 
     # Частичные TP (в % ROE)
     PARTIAL_TP_ENABLED: bool = True
-    PARTIAL_TP1_PCT: float = 100.0  
+    PARTIAL_TP1_PCT: float = 80.0  
     PARTIAL_TP2_PCT: float = 300.0  
-    PARTIAL_TP3_PCT: float = 1000.0  
+    PARTIAL_TP3_PCT: float = 800.0  
+    RUNNER_TRAILING_DRAWDOWN_PCT: float = 150.0  # Динамический трейлинг для ракет (150% ROE от пика)
 
     # Время позиции
-    POSITION_TIMEOUT_HOURS: float = 2.0
+    POSITION_TIMEOUT_HOURS: float = 4.0
     BAD_POSITION_TIMEOUT_MINUTES: int = 12
-    BAD_TRADE_EXIT_MINUTES: int = 6
+    BAD_TRADE_EXIT_MINUTES: int = 15
     SMART_EXIT_ANALYSIS: bool = True
     WEAK_MOMENTUM_EXIT: float = -8.0
 
@@ -1396,8 +1398,6 @@ class SmartMoneyBot:
                 logger.warning(f"Файл модели не найден по пути: {model_path}")
         except Exception as e:
             logger.warning(f"Ошибка при загрузке ML-фильтра: {e}")
-        except Exception as e:
-            logger.warning(f"Ошибка загрузки ML модели: {e}")
 
         self._opening_symbols: set = set()
         self._scan_lock = asyncio.Lock()
@@ -1759,8 +1759,8 @@ class SmartMoneyBot:
                     prob = self.ml_model.predict_proba(features_df)[0][1]
 
                     
-                    if prob < 0.40:
-                        msg = f"🧠 AI Фильтр: Сигнал #{symbol} отменен (Вероятность {prob*100:.1f}% < 40%)"
+                    if prob < 0.60:
+                        msg = f"🧠 AI Фильтр: Сигнал #{symbol} отменен (Вероятность {prob*100:.1f}% < 60%)"
                         logger.info(msg)
                         # Можно раскомментировать, чтобы бот писал об отмене в ТГ:
                         # await self.send_telegram_message(msg)
@@ -1769,12 +1769,14 @@ class SmartMoneyBot:
                     # СДВИНУТО ВПРАВО:
                     ai_prob_str = f"🧠 AI Уверенность: {prob*100:.1f}%\n"
                     
-                    # Масштабируем размер: 40% вероятности = минимум ($5), 100% = максимум (80% от ENTRY_AMOUNT)
-                    max_risk = 0.80
-                    min_risk = config.MIN_SLOT_USDT / config.ENTRY_AMOUNT if config.ENTRY_AMOUNT > 0 else 0.1
-                    min_risk = min(min_risk, max_risk) # Защита, если MIN_SLOT вдруг больше 80% депозита
-
-                    risk_mult = min_risk + ((prob - 0.40) / 0.60) * (max_risk - min_risk)
+                    # V2: Квадратичный сайзинг
+                    base_amount = config.ENTRY_AMOUNT if config.ENTRY_AMOUNT > 0 else (100)
+                    max_risk = 0.95
+                    min_risk = config.MIN_SLOT_USDT / base_amount if base_amount > 0 else 0.1
+                    min_risk = min(min_risk, max_risk)
+                    # Квадратичное масштабирование: 60%=мин, 80%=25%, 90%=56%, 95%=77%
+                    normalized = (prob - 0.60) / 0.40
+                    risk_mult = min_risk + (normalized ** 2) * (max_risk - min_risk)
                     
                     # Ограничиваем на всякий случай
                     risk_mult = max(min_risk, min(risk_mult, max_risk))
@@ -1925,8 +1927,8 @@ class SmartMoneyBot:
                 
                 # 🛡 Жёсткие границы (Floor & Ceiling):
                 # Минимум 1.5% (чтобы на BTC/ETH не ставить стоп 0.1%)
-                # Максимум 4.5% (чтобы на шиткоинах стоп не улетал на 15% и не ждал ликвидации)
-                sl_dist_pct = max(2.5, min(sl_dist_pct, 4.5))  # Floor & Ceiling            
+                # Максимум 3.0% (чтобы на шиткоинах стоп не улетал на 15% и не ждал ликвидации)
+                sl_dist_pct = max(1.5, min(sl_dist_pct, 3.0))  # Floor & Ceiling            
                 sl_dist = actual_entry * (sl_dist_pct / 100)
                 logger.info(f"{symbol}: 🧠 Dynamic SL = {sl_dist_pct:.2f}% (ATR={atr_val:.6f})")
             else:
@@ -1940,14 +1942,19 @@ class SmartMoneyBot:
             tp2_dist = actual_entry * (config.PARTIAL_TP2_PCT / actual_leverage / 100)
             tp3_dist = actual_entry * (config.PARTIAL_TP3_PCT / actual_leverage / 100)
 
+            try:
+                min_price = float(self.exchange.markets[symbol]['limits']['price']['min'])
+            except:
+                min_price = 0.000001
+
             if direction == 'SHORT':
                 actual_sl = float(self.exchange.price_to_precision(symbol, actual_entry + sl_dist))
-                tp1_price = float(self.exchange.price_to_precision(symbol, actual_entry - tp1_dist))
-                tp2_price = float(self.exchange.price_to_precision(symbol, actual_entry - tp2_dist))
-                tp3_price = float(self.exchange.price_to_precision(symbol, actual_entry - tp3_dist))
+                tp1_price = float(self.exchange.price_to_precision(symbol, max(min_price, actual_entry - tp1_dist)))
+                tp2_price = float(self.exchange.price_to_precision(symbol, max(min_price, actual_entry - tp2_dist)))
+                tp3_price = float(self.exchange.price_to_precision(symbol, max(min_price, actual_entry - tp3_dist)))
                 close_side = 'BUY'
             else:
-                actual_sl = float(self.exchange.price_to_precision(symbol, actual_entry - sl_dist))
+                actual_sl = float(self.exchange.price_to_precision(symbol, max(min_price, actual_entry - sl_dist)))
                 tp1_price = float(self.exchange.price_to_precision(symbol, actual_entry + tp1_dist))
                 tp2_price = float(self.exchange.price_to_precision(symbol, actual_entry + tp2_dist))
                 tp3_price = float(self.exchange.price_to_precision(symbol, actual_entry + tp3_dist))
@@ -2223,6 +2230,21 @@ class SmartMoneyBot:
                             if attempt < max_retries - 1:
                                 await asyncio.sleep(2)
                                 continue
+                        if '-4131' in error_text or 'PERCENT_PRICE' in error_text:
+                            logger.warning(f"MARKET order rejected due to PERCENT_PRICE. Attempting LIMIT order fallback for {symbol}")
+                            try:
+                                ticker = await self.exchange.fetch_ticker(symbol)
+                                current_price = float(ticker['last'])
+                                if position.side == 'SHORT':
+                                    limit_price = float(self.exchange.price_to_precision(symbol, current_price * 1.05))
+                                    order = await self.exchange.create_limit_buy_order(symbol, qty_close, limit_price, params=order_params)
+                                else:
+                                    limit_price = float(self.exchange.price_to_precision(symbol, current_price * 0.95))
+                                    order = await self.exchange.create_limit_sell_order(symbol, qty_close, limit_price, params=order_params)
+                                break
+                            except Exception as limit_err:
+                                logger.error(f"Fallback LIMIT order also failed: {limit_err}")
+                                raise close_error
                         raise close_error
 
             except Exception as close_error:
@@ -3701,11 +3723,11 @@ async def main():
 
     config.DEPOSIT = 100.0                 # Твой реальный депозит
     config.ENTRY_AMOUNT = 100.0
-    config.LEVERAGE = 25                   # ⚠️ Синхронизировано с бэктестом (x25 Асимметричный Охотник)
-    config.STOP_LOSS_PCT = 1.0             # Фоллбек, если ATR не сработает (синхронизировано с бэктестом)
-    config.REINVEST_PROFITS = True         # Включаем сложный процент (компаундинг)
+    config.LEVERAGE = 20                   # ⚠️ V2 Pro: x20 с высоким минимумом ставки
+    config.STOP_LOSS_PCT = 1.5
+    config.REINVEST_PROFITS = True
     config.DRAWDOWN_ALERT = 12.0
-    config.MAX_CONCURRENT_POSITIONS = 3   # ⚠️ Золотая середина: защита от корреляции и разгона просадок
+    config.MAX_CONCURRENT_POSITIONS = 3   # Снайперские 3 позиции
     config.MAX_SESSION_LOSS_PCT = 35.0     # 🛑 Экстренный стоп на день
     config.FILL_THRESHOLD = 0.90
 
