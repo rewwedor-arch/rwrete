@@ -65,15 +65,15 @@ async def main():
         if vol >= config.MIN_VOLUME_USDT:
             valid_pairs.append(s)
             
-    # Берем ВСЕ пары, прошедшие фильтр объема (для полного теста)
-    top_pairs = valid_pairs
-    logger.info(f"✅ Бэктест на {len(top_pairs)} волатильных альтах (ВЕСЬ РЫНОК)")
+    # Берем первые 182 пары (история по которым уже выкачана в кэш)
+    top_pairs = valid_pairs[:182]
+    logger.info(f"✅ Бэктест на {len(top_pairs)} волатильных альтах (ВЕСЬ РЫНОК КРОМЕ ХВОСТА)")
     
     fg_data = await get_fear_and_greed()
     analyzer = BacktestAnalyzer(exchange)
     
     days = 30 # Длительность бэктеста в днях
-    offset_days = 0 # Сдвиг в прошлое (0 = последний месяц), 30 = предыдущий месяц, 60 = два месяца назад)
+    offset_days = 30 # Сдвиг в прошлое (0 = последний месяц), 30 = предыдущий месяц, 60 = два месяца назад)
     
     since_ms = int((datetime.now(timezone.utc) - timedelta(days=days + offset_days)).timestamp() * 1000)
     limit_15m = days * 24 * 4
