@@ -990,8 +990,15 @@ class SMCAnalyzer:
         }
 
         try:
-            ohlcv_5m = await self.get_ohlcv(symbol, config.SCANNER_TIMEFRAME, limit=100)
-            ohlcv_1h = await self.get_ohlcv(symbol, config.TREND_TIMEFRAME, limit=300)
+            ohlcv_5m = await self.get_ohlcv(symbol, config.SCANNER_TIMEFRAME, limit=101)
+            ohlcv_1h = await self.get_ohlcv(symbol, config.TREND_TIMEFRAME, limit=301)
+
+# СРЕЗАЕМ ПОСЛЕДНЮЮ (ФОРМИРУЮЩУЮСЯ) СВЕЧУ, чтобы анализ был 1-в-1 как в бэктесте
+            if len(ohlcv_5m) > 1:
+                ohlcv_5m = ohlcv_5m[:-1]
+            if len(ohlcv_1h) > 1:
+                ohlcv_1h = ohlcv_1h[:-1]
+
 
             if not ohlcv_5m or not ohlcv_1h:
                 return result
@@ -1701,14 +1708,14 @@ class SmartMoneyBot:
             #return None
        
         # СТАЛО:
-        if await self.is_session_loss_limit_reached():
+        #if await self.is_session_loss_limit_reached():
 
-            logger.warning(f"MAX_SESSION_LOSS достигнут — все сделки заблокированы")
-            return None
+            #logger.warning(f"MAX_SESSION_LOSS достигнут — все сделки заблокированы")
+            #return None
 
-        if self.is_daily_loss_limit_reached():
-            logger.warning(f"Дневной лимит убытков достигнут — новые сделки заблокированы")
-            return None
+        #if #self.is_daily_loss_limit_reached():
+            #logger.warning(f"Дневной лимит убытков достигнут — новые сделки заблокированы")
+            #return None
 
         if len(self.positions) >= config.MAX_CONCURRENT_POSITIONS:
             logger.info(f"Лимит позиций {config.MAX_CONCURRENT_POSITIONS} достигнут — пропуск {symbol}")
@@ -1718,8 +1725,8 @@ class SmartMoneyBot:
             logger.info(f"Открытие {symbol} уже в процессе — пропуск")
             return None
 
-        if not await self.check_spread(symbol):
-            return None
+        #if not await self.check_spread(symbol):
+            #return None
 
         self._opening_symbols.add(symbol)
 
@@ -2841,12 +2848,13 @@ class SmartMoneyBot:
                         funding_rate = float(funding_info.get('fundingRate', 0))
                         direction = smc_result.get('direction', 'LONG')
 
-                        if direction == 'LONG' and funding_rate > 0.0005:
-                            logger.info(f"Пропуск LONG {symbol}: funding={funding_rate:.4%}")
-                            continue
-                        elif direction == 'SHORT' and funding_rate < -0.0005:
-                            logger.info(f"Пропуск SHORT {symbol}: funding={funding_rate:.4%}")
-                            continue
+# if direction == 'LONG' and funding_rate > 0.0005:
+#     logger.info(f"Пропуск LONG {symbol}: funding={funding_rate:.4%}")
+#     continue
+# elif direction == 'SHORT' and funding_rate < -0.0005:
+#     logger.info(f"Пропуск SHORT {symbol}: funding={funding_rate:.4%}")
+#     continue
+
                     except Exception:
                         pass
 
